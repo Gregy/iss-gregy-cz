@@ -1,0 +1,25 @@
+name = "iss-push"
+main = "src/index.js"
+compatibility_date = "2025-09-15"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "iss-push"
+database_id = "00000000-0000-0000-0000-000000000000" # replace with the id from `wrangler d1 create iss-push`
+migrations_dir = "migrations"
+
+# Per-IP limit on the write endpoints. Optional: remove this block if your
+# account doesn't offer the rate limiting binding; the worker then skips the check.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }
+
+[vars]
+# Browser origins allowed to call the API (your GitHub Pages origin; localhost for development).
+ALLOWED_ORIGINS = "https://YOUR-USER.github.io,http://localhost:8765,http://127.0.0.1:8765"
+MAX_SUBSCRIPTIONS = "1000"
+SEND_BATCH = "40" # pushes per cron run; the free plan allows 50 subrequests per invocation

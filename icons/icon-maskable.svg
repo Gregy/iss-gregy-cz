@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="38%" r="70%">
+      <stop offset="0" stop-color="#1d2a55"/><stop offset="1" stop-color="#0b1020"/>
+    </radialGradient>
+    <linearGradient id="earth" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b6cb0"/><stop offset="1" stop-color="#173a6b"/>
+    </linearGradient>
+    <linearGradient id="pv" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ffd27a"/><stop offset="1" stop-color="#c98a2e"/>
+    </linearGradient>
+    <linearGradient id="mod" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#aab5cf"/><stop offset=".45" stop-color="#ffffff"/><stop offset="1" stop-color="#b9c3da"/>
+    </linearGradient>
+    <linearGradient id="modh" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#aab5cf"/><stop offset=".45" stop-color="#ffffff"/><stop offset="1" stop-color="#b9c3da"/>
+    </linearGradient>
+    <!-- one solar array wing: two blankets either side of a mast, pointing up from the truss -->
+    <g id="w">
+      <rect x="-18" y="-122" width="16" height="108" fill="url(#pv)"/>
+      <rect x="2" y="-122" width="16" height="108" fill="url(#pv)"/>
+      <path d="M-18 -100.4h36M-18 -78.8h36M-18 -57.2h36M-18 -35.6h36" stroke="#6b3f0e" stroke-width="2.5" opacity=".6"/>
+      <path d="M-10 -122v108M10 -122v108" stroke="#6b3f0e" stroke-width="1.5" opacity=".35"/>
+      <rect x="-1.5" y="-124" width="3" height="114" fill="#dfe5f2"/>
+    </g>
+    <g id="pair"><use xlink:href="#w"/><use xlink:href="#w" transform="scale(1 -1)"/></g>
+  </defs>
+  <rect width="512" height="512" fill="url(#sky)"/>
+  <circle cx="150" cy="112" r="5" fill="#fff" opacity=".8"/><circle cx="372" cy="96" r="4" fill="#fff" opacity=".6"/>
+  <circle cx="430" cy="350" r="3" fill="#fff" opacity=".5"/><circle cx="84" cy="360" r="3" fill="#fff" opacity=".5"/>
+  <g>
+    <circle cx="256" cy="760" r="360" fill="url(#earth)"/>
+    <circle cx="256" cy="760" r="364" fill="none" stroke="#5eead4" stroke-width="5" opacity=".55"/>
+  </g>
+  <g transform="translate(256 246) rotate(-10) scale(.84)">
+    <!-- module stack: Harmony + Columbus/Kibo, Destiny, Unity | Zarya, Zvezda + Russian arrays, Soyuz -->
+    <rect x="-48" y="-96" width="36" height="24" rx="10" fill="url(#modh)"/>
+    <rect x="12" y="-94" width="30" height="20" rx="9" fill="url(#modh)"/>
+    <rect x="-7" y="-112" width="14" height="14" rx="4" fill="#c9d1e6"/>
+    <rect x="-13" y="-102" width="26" height="92" rx="11" fill="url(#mod)"/>
+    <rect x="-64" y="88" width="128" height="14" rx="2" fill="#7aa2ff"/>
+    <path d="M-48 88v14M-32 88v14M32 88v14M48 88v14" stroke="#0b1020" stroke-width="2" opacity=".45"/>
+    <rect x="-13" y="10" width="26" height="102" rx="11" fill="url(#mod)"/>
+    <path d="M-13 60h26" stroke="#7d89a8" stroke-width="2"/>
+    <rect x="-7" y="110" width="14" height="16" rx="5" fill="#c9d1e6"/>
+    <!-- radiators -->
+    <g fill="#f4f6fb" stroke="#aeb9d3" stroke-width="2">
+      <rect x="-92" y="-70" width="30" height="62"/><rect x="62" y="-70" width="30" height="62"/>
+    </g>
+    <path d="M-92 -49h30M-92 -29h30M62 -49h30M62 -29h30" stroke="#aeb9d3" stroke-width="2"/>
+    <!-- integrated truss -->
+    <rect x="-206" y="-9" width="412" height="18" rx="3" fill="#d5dcec"/>
+    <path d="M-206 0H206" stroke="#8b96b3" stroke-width="3" stroke-dasharray="12 8"/>
+    <rect x="-16" y="-12" width="32" height="24" rx="5" fill="#eef2fa"/>
+    <!-- four pairs of solar array wings -->
+    <use xlink:href="#pair" x="-178"/><use xlink:href="#pair" x="-136"/>
+    <use xlink:href="#pair" x="136"/><use xlink:href="#pair" x="178"/>
+  </g>
+</svg>

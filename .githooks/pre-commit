@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs scripts/precommit.mjs. Skip once with: git commit --no-verify
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found, skipping checks" >&2
+  exit 0
+fi
+exec node "$(git rev-parse --show-toplevel)/scripts/precommit.mjs"

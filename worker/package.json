@@ -1,0 +1,14 @@
+{
+  "name": "iss-push-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --test-scheduled",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/webpush.test.mjs test/api.test.mjs && node test/relay.e2e.mjs"
+  },
+  "devDependencies": {
+    "http_ece": "1.2.0",
+    "wrangler": "4.42.0"
+  }
+}

@@ -1,0 +1,61 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['worker/**']
+  schedule:
+    # Re-deploy with fresh ISS orbital elements every 6 hours. The app also
+    # fetches them directly from CelesTrak; this copy is a same-origin fallback.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false # never abort a deploy half-way; queue instead
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refresh ISS orbital elements
+        run: |
+          if curl -fsS --retry 3 -A "iss-pass-tracker (GitHub Pages build)" \
+               'https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE' -o /tmp/iss.tle \
+             && grep -q '^1 25544' /tmp/iss.tle; then
+            mv /tmp/iss.tle data/iss.tle
+            cat data/iss.tle
+          else
+            echo "::warning::TLE refresh failed, deploying the committed copy"
+          fi
+
+      - name: Point the app at the push relay
+        if: vars.PUSH_SERVER != ''
+        env:
+          PUSH_SERVER: ${{ vars.PUSH_SERVER }}
+        run: |
+          sed -i "s#^export const PUSH_SERVER = '.*';#export const PUSH_SERVER = '${PUSH_SERVER%/}';#" js/config.js
+          cat js/config.js
+
+      - name: Unit tests
+        run: node --test 'test/unit/*.test.mjs'
+
+      - name: Leave the relay and development files out of the site
+        run: rm -rf worker test scripts .githooks package.json package-lock.json
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4

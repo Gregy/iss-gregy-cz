@@ -1,0 +1,157 @@
+// Alert engine shared by the page and the service worker: predicts passes,
+// scores them against the forecast and books the resulting notifications on
+// the push relay. Every sync uploads the complete list of upcoming alerts, so a
+// pass that no longer qualifies simply disappears from the relay's schedule.
+import { compass, makeObserver } from './astro.js';
+import { predictPasses } from './passes.js';
+import { fetchWeather, scorePass } from './weather.js';
+import { loadTle } from './tle.js';
+import { prepareAlerts, uploadSchedule, retryPendingForgets, subscribe } from './push.js';
+import * as store from './store.js';
+
+const WEATHER_MAX_AGE = 45 * 60e3;
+const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
+
+export async function loadWeather(loc, { force = false } = {}) {
+  const cached = await store.get('weather');
+  const same = cached && Math.abs(cached.lat - loc.lat) < 0.02 && Math.abs(cached.lon - loc.lon) < 0.02;
+  if (!force && same && Date.now() - cached.fetched < WEATHER_MAX_AGE) return cached;
+  try {
+    const w = await fetchWeather(loc.lat, loc.lon);
+    await store.set('weather', w);
+    if (w.timezone && loc.tz !== w.timezone) {
+      loc.tz = w.timezone;
+      await store.set('location', loc);
+    }
+    return w;
+  } catch (e) {
+    console.warn('weather failed', e);
+    return same ? cached : null;
+  }
+}
+
+/** Passes + scores for a location. */
+export async function computeForecast(loc, { hours = 240, from = Date.now(), forceTle = false } = {}) {
+  const [tle, weather] = await Promise.all([loadTle({ force: forceTle }), loadWeather(loc)]);
+  const observer = makeObserver(loc.lat, loc.lon, loc.height || 0);
+  const passes = predictPasses(tle.satrec, observer, from, hours);
+  for (const p of passes) p.rating = scorePass(p, weather);
+  return { tle, weather, observer, passes };
+}
+
+export function qualifies(p, s) {
+  const r = p.rating;
+  if (!p.visible || !r) return false;
+  if (p.visible.max.el < s.minElevation) return false;
+  return r.score >= s.minScore;
+}
+
+// ---------- formatting ----------
+
+export function fmtTime(t, tz) {
+  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: tz }).format(t);
+}
+
+/** "Tonight" / "Today" / "Tomorrow" / weekday of `t`, as seen at time `now`. */
+export function fmtDay(t, tz, now = Date.now()) {
+  const day = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(ms);
+  const d = day(t);
+  if (d === day(now)) {
+    const h = Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: tz }).format(t));
+    return h >= 17 || h < 4 ? 'Tonight' : 'Today';
+  }
+  if (d === day(now + 86400e3)) return 'Tomorrow';
+  return new Intl.DateTimeFormat(undefined, { weekday: 'long', timeZone: tz }).format(t);
+}
+
+export function describePass(p, tz) {
+  const v = p.visible;
+  const r = p.rating;
+  const mag = v.minMag != null ? `mag ${v.minMag.toFixed(1)}` : '';
+  const wx = r.wx ? `clouds ${Math.round(r.wx.effective)}%` : 'no forecast yet';
+  return {
+    when: `${fmtDay(v.start.t, tz)} ${fmtTime(v.start.t, tz)}`,
+    path: `Appears ${fmtTime(v.start.t, tz)} in the ${compass(v.start.az)}, highest ${Math.round(v.max.el)}° ${compass(v.max.az)} at ${fmtTime(v.max.t, tz)}, gone ${fmtTime(v.end.t, tz)} ${compass(v.end.az)}.`,
+    stats: [mag, wx, `score ${r.score}`].filter(Boolean).join(' · '),
+  };
+}
+
+// ---------- schedule ----------
+
+/** Notifications to book for qualifying passes within the horizon. */
+export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) {
+  const horizon = now + settings.horizonHours * 3600e3;
+  const out = [];
+  for (const p of passes) {
+    if (!qualifies(p, settings)) continue;
+    const v = p.visible;
+    const d = describePass(p, loc.tz);
+    const common = { tag: p.id, url: `${baseUrl}#pass=${p.id}`, body: `${d.path}\n${d.stats}` };
+    const lead = v.start.t - settings.leadMinutes * 60e3;
+    if (lead > now && lead <= horizon) {
+      out.push({ ...common, id: `${p.id}-lead`, at: lead, kind: 'lead', title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}` });
+    }
+    if (settings.headsUpHours > 0) {
+      const ahead = v.start.t - settings.headsUpHours * 3600e3;
+      if (ahead > now && ahead <= horizon) {
+        out.push({ ...common, id: `${p.id}-ahead`, at: ahead, kind: 'info', title: `🛰️ ${fmtDay(v.start.t, loc.tz, ahead)} ${fmtTime(v.start.t, loc.tz)}: good ISS pass` });
+      }
+    }
+  }
+  return out.sort((a, b) => a.at - b.at).slice(0, 60);
+}
+
+/**
+ * Recompute the alert schedule and upload it, encrypted and signed, for this
+ * device's push subscription. `registration` is the ServiceWorkerRegistration
+ * (the page and the service worker each have one).
+ */
+export async function syncPush(opts) {
+  // page and service worker may both run this at once; serialise on a Web Lock
+  if (globalThis.navigator?.locks) return navigator.locks.request('iss-push-sync', () => syncLocked(opts));
+  return syncLocked(opts);
+}
+
+async function syncLocked({ source, registration, baseUrl, now = Date.now(), force = false }) {
+  const settings = await store.getSettings();
+  const loc = await store.get('location');
+  const skip = async (why) => { await store.set('lastCheck', { t: now, source, skipped: why }); return { skipped: why }; };
+  await retryPendingForgets().catch(() => {});
+  if (!settings.pushEnabled) return { skipped: 'push off' };
+  if (!loc) return skip('no location');
+  if (!settings.pushServer) return skip('no relay configured');
+  let sub = await registration.pushManager.getSubscription();
+  if (!sub) return skip('not subscribed');
+
+  try {
+    const { passes, weather } = await computeForecast(loc, { hours: settings.horizonHours + 1, from: now });
+    // without any forecast every pass would look clear; keep the previous bookings instead
+    if (!weather) throw new Error('no weather forecast available, previous alerts kept');
+    const alerts = buildSchedule(passes, settings, loc, baseUrl, now);
+    const good = passes.filter((p) => qualifies(p, settings)).length;
+    const digest = settings.pushServer + sub.endpoint + JSON.stringify(alerts);
+    const last = await store.get('push');
+    if (!force && last?.digest === digest && now - last.t < RESYNC_UNCHANGED) {
+      await store.set('lastCheck', { t: now, source, good, booked: last.booked, next: last.next, unchanged: true });
+      return { good, booked: last.booked, next: last.next, unchanged: true };
+    }
+    let r = await uploadSchedule(settings, sub, await prepareAlerts(sub, alerts, baseUrl));
+    if (r.invalid) {
+      // the push service rejected this device's signature (e.g. the key was lost
+      // while the subscription survived): start over with a fresh subscription
+      await sub.unsubscribe();
+      sub = await subscribe(registration);
+      r = await uploadSchedule(settings, sub, await prepareAlerts(sub, alerts, baseUrl));
+      await store.log(source, 'push service rejected the old subscription; resubscribed');
+    }
+    await store.set('push', { t: now, digest: settings.pushServer + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next });
+    await store.set('lastCheck', { t: now, source, good, booked: r.booked, next: r.next });
+    await store.log(source, `${good} good pass(es); ${r.booked} alert(s) booked${r.next ? ', next ' + new Date(r.next).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''}`);
+    return { good, booked: r.booked, next: r.next };
+  } catch (e) {
+    const error = String(e.message || e);
+    await store.set('lastCheck', { t: now, source, error });
+    await store.log(source, 'sync failed: ' + error);
+    return { error };
+  }
+}

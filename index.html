@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ISS Pass Tracker</title>
+  <meta name="description" content="Live ISS position and alerts for visible passes, scored by weather, sky darkness and geometry.">
+  <meta name="theme-color" content="#0b1020">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="vendor/leaflet/leaflet.js" defer></script>
+  <script src="js/app.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="icons/icon.svg" alt="" width="26" height="26"> <span>ISS Pass Tracker</span></div>
+    <button id="locBtn" class="chip" type="button" aria-label="Change location">📍 <span id="locName">Set location</span></button>
+  </header>
+
+  <main>
+    <!-- LIVE -->
+    <section id="view-live" class="view" data-view="live">
+      <div class="map-wrap">
+        <div id="map"></div>
+        <div class="map-legend" title="Tap the ISS or a ring for details">
+          <span><i class="lg lit"></i>sunlit</span><span><i class="lg dark"></i>in shadow</span><span><i class="lg foot"></i>visible (≥10°)</span><span><i class="lg horizon"></i>above horizon</span>
+        </div>
+      </div>
+      <div class="live-panel">
+        <div class="stats">
+          <div class="stat"><span class="k">Latitude</span><span class="v" id="sLat">–</span></div>
+          <div class="stat"><span class="k">Longitude</span><span class="v" id="sLon">–</span></div>
+          <div class="stat"><span class="k">Altitude</span><span class="v" id="sAlt">–</span></div>
+          <div class="stat"><span class="k">Speed</span><span class="v" id="sSpd">–</span></div>
+        </div>
+        <div id="liveLook" class="card look"></div>
+        <div id="nextPass"></div>
+        <p class="fine" id="tleInfo"></p>
+      </div>
+    </section>
+
+    <!-- VISIBLE PASSES -->
+    <section id="view-passes" class="view" data-view="passes" hidden>
+      <div id="passList" class="pass-list"><p class="empty">Computing passes…</p></div>
+    </section>
+
+    <!-- ALERTS -->
+    <section id="view-alerts" class="view" data-view="alerts" hidden>
+      <div class="card">
+        <div class="card-head"><h2>🔔 Push notifications</h2><label class="switch"><input type="checkbox" id="pushEnabled"><span></span></label></div>
+        <ul class="status" id="pushStatus"></ul>
+        <div class="field"><label for="horizonHours">Book alerts up to</label>
+          <select id="horizonHours"><option value="24">24 h ahead</option><option value="48">48 h ahead</option><option value="72">72 h ahead</option><option value="96">96 h ahead</option></select></div>
+        <p class="hint">The forecast is re-checked whenever you open the app and, if installed, in the background. A shorter window means fresher weather in your alerts.</p>
+        <div class="row"><button class="btn ghost" id="pushTest" type="button">Send test</button><button class="btn ghost" id="pushSync" type="button">Sync now</button></div>
+        <details class="log"><summary>Relay</summary>
+          <div class="field"><label for="pushServer">Relay URL</label><input id="pushServer" type="url" spellcheck="false" placeholder="https://iss-push.example.workers.dev"></div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>What counts as a notification-worthy pass?</h2>
+        <div class="field"><label for="minElevation">Minimum height <output id="minElevationOut"></output></label>
+          <input type="range" id="minElevation" min="10" max="80" step="5"></div>
+        <div class="field"><label for="minScore">Minimum score <output id="minScoreOut"></output></label>
+          <input type="range" id="minScore" min="0" max="90" step="5"></div>
+        <p class="hint" id="criteriaPreview"></p>
+      </div>
+
+      <div class="card">
+        <h2>Notification timing</h2>
+        <div class="field"><label for="leadMinutes">Alert me before it appears</label>
+          <select id="leadMinutes"><option value="3">3 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option></select></div>
+        <div class="field"><label for="headsUpHours">Also give me a heads-up</label>
+          <select id="headsUpHours"><option value="0">No</option><option value="1">1 h before</option><option value="2">2 h before</option><option value="4">4 h before</option><option value="8">8 h before</option></select></div>
+      </div>
+    </section>
+
+    <!-- ABOUT -->
+    <section id="view-about" class="view" data-view="about" hidden>
+      <div class="card about-head">
+        <img src="icons/icon.svg" alt="" width="56" height="56">
+        <div><h2>ISS Pass Tracker</h2><p class="hint">Know when to look up. Version <span id="appVersion"></span></p></div>
+      </div>
+
+      <div class="card">
+        <h2>What it does</h2>
+        <ul class="about-list">
+          <li>Shows where the International Space Station is right now, and where to look from your location.</li>
+          <li>Predicts the passes you can actually see over the next 10 days, and scores each one for brightness, sky darkness, duration and the weather forecast.</li>
+          <li>Sends a push notification before a good pass, so you're outside at the right moment.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>How it works</h2>
+        <ul class="about-list">
+          <li><b>Orbit:</b> the ISS position is computed on your device with the standard SGP4 model, from orbital elements published by NORAD via CelesTrak and refreshed several times a day. Predictions are typically accurate to a few seconds.</li>
+          <li><b>Visibility:</b> a pass counts only when the ISS is sunlit, your sky is dark and it's at least 10° up. Each visible pass gets a score; see below.</li>
+          <li><b>Weather:</b> hourly cloud forecasts from Open-Meteo for your location.</li>
+          <li><b>Notifications:</b> your phone works out which passes are worth it, then encrypts and signs each alert itself. A small relay server only holds these sealed messages and sends each one at the right time, even when the app is closed. It can't read them, and it never learns where you are. When the forecast changes, the bookings are replaced, so a pass that clouds over is silently dropped.</li>
+          <li><b>Offline:</b> once loaded, the app and its last forecast work without a connection.</li>
+        </ul>
+      </div>
+
+      <div class="card explain" id="scoring">
+        <h2>How visibility and the score work</h2>
+        <h3>When can you see the ISS?</h3>
+        <p>The ISS has no lights you could see from the ground. It shines by reflecting sunlight. A pass is listed only when, at some point, all three are true:</p>
+        <ul>
+          <li><b>The ISS is in sunlight</b>, not in Earth's shadow.</li>
+          <li><b>Your sky is dark enough:</b> the sun is at least 6° below your horizon (after dusk or before dawn).</li>
+          <li><b>The ISS is at least 10° above your horizon</b>, clear of trees and buildings.</li>
+        </ul>
+        <p>That's why visible passes cluster in the hour or two after sunset and before sunrise, and why some weeks have none.</p>
+        <h3>The score (0–100)</h3>
+        <p>Four factors, each from 0 to 100%, multiplied together. Open any pass in Visible passes to see its own numbers.</p>
+        <table class="explain-table">
+          <tr><th>Brightness</th><td>Estimated magnitude at its brightest moment, as seen from the ground (lower is brighter). It depends on:
+            <ul>
+              <li><b>Distance:</b> overhead the ISS is about 420 km away, near the horizon 1,500 km or more.</li>
+              <li><b>Air:</b> low down you look through much more atmosphere, which dims it by about 1 magnitude at 10° up.</li>
+              <li><b>Angle to the sun:</b> it's brightest with the sun behind you, so you see its fully lit side.</li>
+            </ul>
+            <table class="mag-table">
+              <tr><td>+2</td><td>Polaris</td><td>8%</td></tr>
+              <tr><td>0</td><td>Vega, Arcturus</td><td>42%</td></tr>
+              <tr><td>−1.5</td><td>Sirius, the brightest star</td><td>67%</td></tr>
+              <tr><td>−2.4</td><td>Jupiter</td><td>82%</td></tr>
+              <tr><td>−3.5</td><td>a great ISS pass</td><td>100%</td></tr>
+            </table></td></tr>
+          <tr><th>Dark sky</th><td>Sun's depth below your horizon. −6° gives 65%; −12° or deeper gives 100%.</td></tr>
+          <tr><th>Duration</th><td>How long it's visible. A blink gives 60%; 5 minutes or more gives 100%.</td></tr>
+          <tr><th>Clear sky</th><td>Forecast cloud cover at your location during the pass. Low and mid-level clouds count fully; thin high clouds count less than half, because the ISS usually shines through them. 0% cloud gives 100%, 50% gives about 40%, overcast gives 0. Rain likelihood lowers it further. Passes beyond the forecast range are scored without it.</td></tr>
+        </table>
+        <p>The <b>Minimum height</b> setting under Alerts is separate from the score: use it if trees or buildings block your view low down.</p>
+      </div>
+
+      <div class="card">
+        <h2>Privacy</h2>
+        <p class="hint">Your location stays on your device. The weather service receives it rounded to about 1 km. Turning on GPS, or long-pressing the map, also looks up a place name. There are no accounts, no tracking and no ads.</p>
+      </div>
+
+      <div class="card">
+        <h2>Author</h2>
+        <p>Made by <b>Petr Gregor</b>.</p>
+        <div class="row" id="aboutLinks"></div>
+      </div>
+
+      <div class="card">
+        <h2>App status</h2>
+        <ul class="status" id="appStatus"></ul>
+        <div class="row"><button class="btn" id="installBtn" type="button" hidden>⬇️ Install app</button><button class="btn ghost" id="refreshTle" type="button">Refresh orbit data</button></div>
+        <details class="log"><summary>Background check log</summary><ol id="logList"></ol></details>
+      </div>
+
+      <div class="card">
+        <h2>Data &amp; credits</h2>
+        <p class="hint">Orbital elements: <a href="https://celestrak.org" target="_blank" rel="noopener">CelesTrak</a> / NORAD · Weather: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> (CC BY 4.0) · Imagery: <a href="https://earthdata.nasa.gov/gibs" target="_blank" rel="noopener">NASA GIBS</a> Blue Marble &amp; Black Marble · Place names: BigDataCloud, Open-Meteo geocoding · Libraries: <a href="https://github.com/shashwatak/satellite-js" target="_blank" rel="noopener">satellite.js</a>, <a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>.</p>
+        <p class="hint">Predictions are estimates. Weather can change faster than any forecast.</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <a href="#live" data-tab="live"><span aria-hidden="true">🌍</span>Live</a>
+    <a href="#passes" data-tab="passes"><span aria-hidden="true">🔭</span>Visible passes</a>
+    <a href="#alerts" data-tab="alerts"><span aria-hidden="true">🔔</span>Alerts</a>
+    <a href="#about" data-tab="about"><span aria-hidden="true">ℹ️</span>About</a>
+  </nav>
+
+  <dialog id="locDialog">
+    <form method="dialog" class="dlg">
+      <h2>Your viewing location</h2>
+      <button class="btn" id="geoBtn" type="button">📍 Use my current location</button>
+      <div class="or">or search</div>
+      <input id="locSearch" type="search" placeholder="City or place…" autocomplete="off">
+      <ul id="locResults" class="results"></ul>
+      <p class="hint">Tip: long-press (or right-click) the map to set a location.</p>
+      <div class="row end"><button class="btn ghost" value="cancel">Close</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

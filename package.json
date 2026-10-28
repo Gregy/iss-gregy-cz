@@ -1,0 +1,14 @@
+{
+  "name": "iss-pass-tracker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test 'test/unit/*.test.mjs'",
+    "test:e2e": "node test/e2e/smoke.mjs",
+    "precommit": "node scripts/precommit.mjs",
+    "postinstall": "git config core.hooksPath .githooks || true"
+  },
+  "devDependencies": {
+    "playwright": "1.49.1"
+  }
+}
