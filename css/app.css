@@ -60,14 +60,6 @@ main { flex: 1; min-height: 0; position: relative; }
   .map-wrap { flex: 1 1 auto; }
   .live-panel { flex: 0 0 400px; border-left: 1px solid var(--line); }
 }
-.map-legend {
-  position: absolute; left: 10px; bottom: 22px; z-index: 500; display: flex; flex-wrap: wrap; gap: .3rem .7rem; max-width: calc(100% - 20px);
-  background: rgba(19, 26, 46, .85); border-radius: 8px; padding: .25rem .55rem; font-size: .72rem; color: var(--muted);
-}
-.lg { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
-.lg.lit { background: var(--accent); } .lg.dark { background: var(--accent-2); }
-.lg.foot { background: transparent; border: 1px solid #5eead4; height: 8px; width: 10px; border-radius: 50%; }
-.lg.horizon { background: transparent; border: 1px dashed #5eead4; height: 8px; width: 10px; border-radius: 50%; opacity: .7; }
 .leaflet-popup.map-tip .leaflet-popup-content-wrapper {
   background: rgba(19, 26, 46, .97); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 4px 18px rgba(0, 0, 0, .5);
