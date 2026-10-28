@@ -438,7 +438,7 @@ function setupAlertsView() {
         await registerPeriodicSync();
         const r = await runPushSync('enabled', true);
         if (r.error) throw new Error(r.error);
-        toast(r.booked ? `${r.booked} alert(s) booked` : 'Subscribed. No passes match your criteria yet.');
+        toast(r.booked ? `Notifications on: ${plural(r.booked, 'notification')} scheduled` : 'Notifications on. No passes match your settings yet.');
       } else {
         await saveSetting({ pushEnabled: false });
         await withSyncLock(() => unsubscribe(state.reg));
@@ -463,9 +463,9 @@ function setupAlertsView() {
   $('#pushSync').addEventListener('click', async () => {
     const r = await runPushSync('manual', true);
     if (r.skipped === 'push off') toast('Turn on push notifications first');
-    else if (r.skipped) toast(`Not synced: ${r.skipped}`);
-    else if (r.error) toast(`Sync failed: ${r.error}`, 4000);
-    else toast(`${r.good} good pass(es) · ${r.booked} alert(s) booked`);
+    else if (r.skipped) toast(`Notifications not scheduled: ${skipReason(r.skipped)}`, 4000);
+    else if (r.error) toast(`Scheduling notifications failed: ${r.error}`, 4000);
+    else toast(`${plural(r.good, 'notification-worthy pass', 'notification-worthy passes')} · ${plural(r.booked, 'notification')} scheduled`);
   });
 
   $('#refreshTle').addEventListener('click', async () => { toast('Refreshing…'); await refreshForecast({ forceTle: true }); toast(`Orbit data from ${state.tle?.source}`); });
@@ -497,6 +497,21 @@ async function registerPeriodicSync() {
   }
 }
 
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** Who scheduled the notifications, in words (internal source names are stored). */
+const SOURCES = {
+  app: 'when you opened the app', enabled: 'when you turned notifications on', manual: 'on request',
+  push: 'when a notification arrived', 'periodic-sync': 'in the background', 'subscription-change': 'after the browser renewed notifications',
+};
+const sourceText = (s) => SOURCES[s] || s;
+const SKIPS = {
+  'push off': 'notifications are off', 'no location': 'no location set',
+  'not subscribed': "this device isn't set up for notifications; turn them off and on again",
+  'service worker not active': "the app isn't fully loaded; reload it",
+};
+const skipReason = (r) => SKIPS[r] || r;
+
 /** What happens to alert bookings without background refresh (h: the booking window). */
 const withoutRefresh = (h) => `Without it, alerts are booked only when you open the app or an alert arrives, ${h} h ahead each time, with the forecast from that moment. More than ${h} h with neither means no new alerts.`;
 
@@ -518,10 +533,12 @@ async function renderAlertStatus() {
   const sub = await getSubscription().catch(() => null);
   const s = state.settings;
   const when = (t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-  const lastLine = !last ? li('warn', 'Not synced yet')
-    : last.error ? li('bad', `Last sync failed (${when(last.t)}): ${esc(last.error)}`)
-      : last.skipped ? li('warn', `Last sync skipped (${when(last.t)}): ${esc(last.skipped)}`)
-        : li('ok', `Synced ${when(last.t)} (${esc(last.source)}): ${last.booked ?? 0} alert(s) booked${last.next ? `, next ${when(last.next)}` : ''}`);
+  const lastLine = !last ? li('warn', 'Notifications not scheduled yet')
+    : last.error ? li('bad', `Scheduling notifications failed ${when(last.t)}: ${esc(last.error)}`)
+      : last.skipped ? li('warn', `Notifications not scheduled ${when(last.t)}: ${esc(skipReason(last.skipped))}`)
+        : li('ok', `Notifications scheduled ${when(last.t)} ${esc(sourceText(last.source))}: ${last.booked
+          ? `${plural(last.booked, 'notification')} coming up${last.next ? `, next ${when(last.next)}` : ''}`
+          : 'no passes match your settings yet'}`);
   // turning on needs a location; turning off always works
   $('#pushEnabled').disabled = !state.loc && !s.pushEnabled;
   $('#pushStatus').innerHTML = !s.pushEnabled
@@ -551,7 +568,7 @@ async function renderAlertStatus() {
     state.tle ? li(Date.now() - state.tle.epoch < 3 * 86400e3 ? 'ok' : 'warn', `Orbit data epoch ${new Date(state.tle.epoch).toLocaleString()} (${state.tle.source})`) : '',
   ].join('');
   const log = (await store.get('log')) || [];
-  $('#logList').innerHTML = log.map((e) => `<li>${new Date(e.t).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} [${esc(e.source)}] ${esc(e.msg)}</li>`).join('');
+  $('#logList').innerHTML = log.map((e) => `<li>${new Date(e.t).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ${esc(sourceText(e.source))}: ${esc(e.msg)}</li>`).join('');
   $('#logEmpty').hidden = log.length > 0;
 }
 

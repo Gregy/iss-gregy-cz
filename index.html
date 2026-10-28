@@ -52,7 +52,7 @@
         <div class="field"><label for="horizonHours">Book alerts up to</label>
           <select id="horizonHours"><option value="24">24 h ahead</option><option value="48">48 h ahead</option><option value="72">72 h ahead</option><option value="96">96 h ahead</option></select></div>
         <p class="hint">The forecast is re-checked whenever you open the app, whenever an alert arrives and, if installed, in the background. A shorter window means fresher weather in your alerts.</p>
-        <div class="row"><button class="btn ghost" id="pushTest" type="button">Send test</button><button class="btn ghost" id="pushSync" type="button">Sync now</button></div>
+        <div class="row"><button class="btn ghost" id="pushTest" type="button">Send test</button><button class="btn ghost" id="pushSync" type="button">Schedule now</button></div>
       </div>
 
       <div class="card">
@@ -153,8 +153,8 @@
         <h2>App status</h2>
         <ul class="status" id="appStatus"></ul>
         <div class="row"><button class="btn" id="installBtn" type="button" hidden>⬇️ Install app</button><button class="btn ghost" id="refreshTle" type="button">Refresh orbit data</button></div>
-        <details class="log"><summary>Background check log</summary><ul id="logList"></ul>
-          <p class="hint" id="logEmpty" hidden>Nothing yet. Each time the alert schedule is checked (when you open the app, when an alert arrives, or in the background) a line appears here. This needs push notifications turned on under Alerts.</p></details>
+        <details class="log"><summary>Notification scheduling log</summary><ul id="logList"></ul>
+          <p class="hint" id="logEmpty" hidden>Nothing yet. Each time notifications are scheduled (when you open the app, when a notification arrives, or in the background) a line appears here. This needs push notifications turned on under Alerts.</p></details>
       </div>
 
       <div class="card">

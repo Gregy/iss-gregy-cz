@@ -193,16 +193,17 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
       await sub.unsubscribe();
       sub = await subscribe(registration);
       r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
-      await store.log(source, 'push service rejected the old subscription; resubscribed');
+      await store.log(source, 'the push service no longer accepted this device; set it up again');
     }
     await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next });
     await store.set('lastCheck', { t: now, source, good, booked: r.booked, next: r.next });
-    await store.log(source, `${good} good pass(es); ${r.booked} alert(s) booked${r.next ? ', next ' + new Date(r.next).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''}`);
+    const n = (k, one) => `${k} ${one}${k === 1 ? '' : 's'}`;
+    await store.log(source, `${n(good, 'notification-worthy pass')}, ${n(r.booked, 'notification')} scheduled${r.next ? ', next ' + new Date(r.next).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''}`);
     return { good, booked: r.booked, next: r.next };
   } catch (e) {
     const error = String(e.message || e);
     await store.set('lastCheck', { t: now, source, error });
-    await store.log(source, 'sync failed: ' + error);
+    await store.log(source, 'scheduling notifications failed: ' + error);
     return { error };
   }
 }

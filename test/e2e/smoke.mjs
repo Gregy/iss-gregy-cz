@@ -123,7 +123,7 @@ await step('time window: knobs move, may cross, and the setting is saved', async
 await step('about page shows the version', async () => {
   await page.goto(origin + '/#about');
   expect((await page.textContent('#appVersion')) === VERSION, 'version');
-  await page.click('details.log summary >> text=Background check log');
+  await page.click('details.log summary >> text=Notification scheduling log');
   expect(await page.isVisible('#logEmpty'), 'empty check log explained');
   expect((await page.$$('#logList li')).length === 0, 'no placeholder entries in the log list');
 });

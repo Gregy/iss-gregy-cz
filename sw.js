@@ -130,7 +130,7 @@ self.addEventListener('pushsubscriptionchange', (e) => {
       if (!e.newSubscription) await subscribe(self.registration);
       await backgroundSync('subscription-change', { force: true });
     } catch (err) {
-      await store.log('subscription-change', 'failed: ' + (err.message || err));
+      await store.log('subscription-change', 'setting up notifications again failed: ' + (err.message || err));
     }
   })());
 });
