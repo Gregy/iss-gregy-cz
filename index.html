@@ -54,7 +54,7 @@
         <ul class="status" id="pushStatus"></ul>
         <div class="field"><label for="horizonHours">Book alerts up to</label>
           <select id="horizonHours"><option value="24">24 h ahead</option><option value="48">48 h ahead</option><option value="72">72 h ahead</option><option value="96">96 h ahead</option></select></div>
-        <p class="hint">The forecast is re-checked whenever you open the app and, if installed, in the background. A shorter window means fresher weather in your alerts.</p>
+        <p class="hint">The forecast is re-checked whenever you open the app, whenever an alert arrives and, if installed, in the background. A shorter window means fresher weather in your alerts.</p>
         <div class="row"><button class="btn ghost" id="pushTest" type="button">Send test</button><button class="btn ghost" id="pushSync" type="button">Sync now</button></div>
         <details class="log"><summary>Relay</summary>
           <div class="field"><label for="pushServer">Relay URL</label><input id="pushServer" type="url" spellcheck="false" placeholder="https://iss-push.example.workers.dev"></div>
@@ -101,8 +101,7 @@
           <li><b>Orbit:</b> the ISS position is computed on your device with the standard SGP4 model, from orbital elements published by NORAD via CelesTrak and refreshed several times a day. Predictions are typically accurate to a few seconds.</li>
           <li><b>Visibility:</b> a pass counts only when the ISS is sunlit, your sky is dark and it's at least 10° up. Each visible pass gets a score; see below.</li>
           <li><b>Weather:</b> hourly cloud forecasts from Open-Meteo for your location.</li>
-          <li><b>Notifications:</b> your phone works out which passes are worth it, then encrypts and signs each alert itself. A small relay server only holds these sealed messages and sends each one at the right time, even when the app is closed. It can't read them, and it never learns where you are. When the forecast changes, the bookings are replaced, so a pass that clouds over is silently dropped.</li>
-          <li><b>Offline:</b> once loaded, the app and its last forecast work without a connection.</li>
+          <li><b>Notifications:</b> your phone works out which passes are worth it, then encrypts and signs each alert itself. A small relay server only holds these sealed messages and sends each one at the right time, even when the app is closed. It can't read them, and it never learns where you are. When the forecast changes, the bookings are replaced, so a pass that clouds over is silently dropped. Each arriving alert also re-checks the forecast: a heads-up re-books the later alerts, and a "look up now" alert tells you if clouds moved in since it was booked.</li>
         </ul>
       </div>
 
@@ -154,7 +153,8 @@
         <h2>App status</h2>
         <ul class="status" id="appStatus"></ul>
         <div class="row"><button class="btn" id="installBtn" type="button" hidden>⬇️ Install app</button><button class="btn ghost" id="refreshTle" type="button">Refresh orbit data</button></div>
-        <details class="log"><summary>Background check log</summary><ol id="logList"></ol></details>
+        <details class="log"><summary>Background check log</summary><ul id="logList"></ul>
+          <p class="hint" id="logEmpty" hidden>Nothing yet. Each time the alert schedule is checked (when you open the app, when an alert arrives, or in the background) a line appears here. This needs push notifications turned on under Alerts.</p></details>
       </div>
 
       <div class="card">

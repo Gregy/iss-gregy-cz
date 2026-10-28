@@ -65,7 +65,7 @@ export async function prepareAlerts(sub, alerts, baseUrl) {
     id: a.id,
     at: a.at,
     kind: a.kind,
-    ...(await prepareMessage(json, JSON.stringify({ title: a.title, body: a.body, tag: a.tag, url: a.url, kind: a.kind }), key, {
+    ...(await prepareMessage(json, JSON.stringify({ title: a.title, body: a.body, tag: a.tag, url: a.url, kind: a.kind, check: a.check }), key, {
       exp: Math.floor(a.at / 1000) + TOKEN_LIFETIME,
       subject: subject(baseUrl),
     })),

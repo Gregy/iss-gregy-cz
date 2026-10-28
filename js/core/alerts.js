@@ -4,7 +4,7 @@
 // pass that no longer qualifies simply disappears from the relay's schedule.
 import { compass, makeObserver } from './astro.js';
 import { predictPasses } from './passes.js';
-import { fetchWeather, scorePass } from './weather.js';
+import { fetchWeather, scorePass, passWeather, clearSkyFactor } from './weather.js';
 import { loadTle } from './tle.js';
 import { prepareAlerts, uploadSchedule, retryPendingForgets, subscribe } from './push.js';
 import * as store from './store.js';
@@ -12,10 +12,10 @@ import * as store from './store.js';
 const WEATHER_MAX_AGE = 45 * 60e3;
 const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
 
-export async function loadWeather(loc, { force = false } = {}) {
+export async function loadWeather(loc, { maxAge = WEATHER_MAX_AGE } = {}) {
   const cached = await store.get('weather');
   const same = cached && Math.abs(cached.lat - loc.lat) < 0.02 && Math.abs(cached.lon - loc.lon) < 0.02;
-  if (!force && same && Date.now() - cached.fetched < WEATHER_MAX_AGE) return cached;
+  if (same && Date.now() - cached.fetched < maxAge) return cached;
   try {
     const w = await fetchWeather(loc.lat, loc.lon);
     await store.set('weather', w);
@@ -31,8 +31,8 @@ export async function loadWeather(loc, { force = false } = {}) {
 }
 
 /** Passes + scores for a location. */
-export async function computeForecast(loc, { hours = 240, from = Date.now(), forceTle = false } = {}) {
-  const [tle, weather] = await Promise.all([loadTle({ force: forceTle }), loadWeather(loc)]);
+export async function computeForecast(loc, { hours = 240, from = Date.now(), forceTle = false, weatherMaxAge } = {}) {
+  const [tle, weather] = await Promise.all([loadTle({ force: forceTle }), loadWeather(loc, { maxAge: weatherMaxAge })]);
   const observer = makeObserver(loc.lat, loc.lon, loc.height || 0);
   const passes = predictPasses(tle.satrec, observer, from, hours);
   for (const p of passes) p.rating = scorePass(p, weather);
@@ -89,7 +89,10 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
     const common = { tag: p.id, url: `${baseUrl}#pass=${p.id}`, body: `${d.path}\n${d.stats}` };
     const lead = v.start.t - settings.leadMinutes * 60e3;
     if (lead > now && lead <= horizon) {
-      out.push({ ...common, id: `${p.id}-lead`, at: lead, kind: 'lead', title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}` });
+      // what the phone needs to re-score the pass against the latest forecast when the alert arrives
+      const f = p.rating.factors;
+      const check = { t: [v.start.t, v.max.t, v.end.t], geo: f.brightness * f.darkSky * f.duration, score: p.rating.score };
+      out.push({ ...common, id: `${p.id}-lead`, at: lead, kind: 'lead', title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}`, check });
     }
     if (settings.headsUpHours > 0) {
       const ahead = v.start.t - settings.headsUpHours * 3600e3;
@@ -99,6 +102,44 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
     }
   }
   return out.sort((a, b) => a.at - b.at).slice(0, 60);
+}
+
+// ---------- at delivery ----------
+
+const FRESH_WEATHER_TIMEOUT = 4000; // a "look up now" alert must not wait longer for the forecast
+
+/**
+ * A "look up now" alert re-scored against `wx`, the latest forecast for its
+ * pass: says so if the sky clouded over since it was booked, otherwise adds the
+ * latest cloud cover. Pure, so it can be tested.
+ */
+export function leadAlertUpdate(d, wx, minScore) {
+  const score = Math.round(d.check.geo * clearSkyFactor(wx) * 100);
+  const cloud = Math.round(wx.effective);
+  if (score < minScore) {
+    return {
+      ...d,
+      title: `☁️ ${d.title.replace(/^🛰️\s*/, '')}, but ${cloud}% cloud now`,
+      body: `Clouds moved in since this alert was booked (score now ${score}, was ${d.check.score}). Worth a look if you see clear patches.\n${d.body}`,
+    };
+  }
+  return { ...d, body: `${d.body}\nLatest forecast: ${cloud}% cloud, score ${score}.` };
+}
+
+/**
+ * Re-check a "look up now" alert against a fresh forecast before it is shown.
+ * Falls back to the alert as booked when the forecast can't be fetched in time.
+ */
+export async function freshenLeadAlert(d) {
+  if (d.kind !== 'lead' || !d.check) return d;
+  const [loc, settings] = await Promise.all([store.get('location'), store.getSettings()]);
+  if (!loc) return d;
+  const timeout = new Promise((resolve) => setTimeout(resolve, FRESH_WEATHER_TIMEOUT, null));
+  const w = await Promise.race([loadWeather(loc, { maxAge: 5 * 60e3 }), timeout]);
+  // loadWeather falls back to its cache when offline: only a fresh forecast says anything new
+  if (!w || Date.now() - w.fetched > 10 * 60e3) return d;
+  const wx = passWeather(w, d.check.t);
+  return wx ? leadAlertUpdate(d, wx, settings.minScore) : d;
 }
 
 /**
@@ -112,7 +153,7 @@ export async function syncPush(opts) {
   return syncLocked(opts);
 }
 
-async function syncLocked({ source, registration, baseUrl, now = Date.now(), force = false }) {
+async function syncLocked({ source, registration, baseUrl, now = Date.now(), force = false, weatherMaxAge }) {
   const settings = await store.getSettings();
   const loc = await store.get('location');
   const skip = async (why) => { await store.set('lastCheck', { t: now, source, skipped: why }); return { skipped: why }; };
@@ -124,7 +165,7 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
   if (!sub) return skip('not subscribed');
 
   try {
-    const { passes, weather } = await computeForecast(loc, { hours: settings.horizonHours + 1, from: now });
+    const { passes, weather } = await computeForecast(loc, { hours: settings.horizonHours + 1, from: now, weatherMaxAge });
     // without any forecast every pass would look clear; keep the previous bookings instead
     if (!weather) throw new Error('no weather forecast available, previous alerts kept');
     const alerts = buildSchedule(passes, settings, loc, baseUrl, now);

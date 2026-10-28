@@ -509,12 +509,13 @@ async function renderAlertStatus() {
         : li('warn', ps === 'unsupported' ? 'No background refresh in this browser. Alerts update when you open the app.' : 'Background refresh inactive. Install the app to the home screen for fresher forecasts.'),
     ].join('');
   $('#appStatus').innerHTML = [
-    standalone ? li('ok', 'Running as installed app') : li('warn', 'Running in the browser. Install it for background forecast refresh and offline use.'),
+    standalone ? li('ok', 'Running as installed app') : li('warn', 'Running in the browser. Install it to let the forecast refresh in the background.'),
     state.reg ? li('ok', 'Offline support active') : li('warn', 'Service worker not active'),
     state.tle ? li(Date.now() - state.tle.epoch < 3 * 86400e3 ? 'ok' : 'warn', `Orbit data epoch ${new Date(state.tle.epoch).toLocaleString()} (${state.tle.source})`) : '',
   ].join('');
   const log = (await store.get('log')) || [];
-  $('#logList').innerHTML = log.map((e) => `<li>${new Date(e.t).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} [${esc(e.source)}] ${esc(e.msg)}</li>`).join('') || '<li>empty</li>';
+  $('#logList').innerHTML = log.map((e) => `<li>${new Date(e.t).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} [${esc(e.source)}] ${esc(e.msg)}</li>`).join('');
+  $('#logEmpty').hidden = log.length > 0;
 }
 
 // ---------- about ----------
@@ -525,7 +526,8 @@ function renderAbout() {
     GITHUB_URL && `<a class="btn ghost" href="${esc(GITHUB_URL)}" target="_blank" rel="noopener">Source code on GitHub</a>`,
     SPONSOR_URL && `<a class="btn" href="${esc(SPONSOR_URL)}" target="_blank" rel="noopener">♥ Sponsor</a>`,
   ].filter(Boolean);
-  $('#aboutLinks').innerHTML = links.length ? links.join('') : '<p class="hint">Links to the source code and sponsorship are coming soon.</p>';
+  $('#aboutLinks').innerHTML = links.join('');
+  $('#aboutLinks').hidden = !links.length;
 }
 
 // ---------- boot ----------

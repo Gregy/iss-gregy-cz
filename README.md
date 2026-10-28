@@ -31,7 +31,8 @@ for each alert:
 - Every sync uploads the **complete** list, so a pass that clouds over is cancelled exactly; nothing is sent.
 - **At-most-once delivery:** the cron claims rows before sending. A crash, timeout or overlapping run can lose an alert, never duplicate it. Only explicit 429/5xx answers are retried. Alerts more than 10 minutes late are dropped.
 - Delivery is within ±30 s of the booked time.
-- The schedule is re-synced whenever the app is opened, and in the background via Periodic Background Sync when the app is installed (Chrome/Android decides how often, usually every 12–24 h). A shorter booking window ("Book alerts up to") means fresher forecasts.
+- The schedule is re-synced whenever the app is opened, whenever an alert arrives (the service worker is awake anyway: a heads-up thus refreshes the later "look up now" alert, or cancels it), and in the background via Periodic Background Sync when the app is installed (Chrome/Android decides how often, usually every 12–24 h). A shorter booking window ("Book alerts up to") means fresher forecasts.
+- A "look up now" alert carries its pass's times and score factors. On arrival the service worker fetches a fresh forecast (4 s at most) and re-scores the pass: if it has dropped below your minimum score the notification says the clouds moved in, otherwise it adds the latest cloud cover. It can't be suppressed: browsers require every push to show a notification, which also rules out silent "wake up and refresh" pushes.
 
 **Multiple users.** Each browser subscription is one user, with no accounts. Rows are keyed by subscription, so one user's uploads can never touch another's. The subscription's `auth` secret acts as its password: only its hash is stored, and changes need the same secret. The relay protects itself with:
 - only POSTing to known push services (FCM, Mozilla, Apple, Windows);

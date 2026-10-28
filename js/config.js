@@ -4,7 +4,7 @@
 // the app under Alerts → Push notifications → Relay.
 export const PUSH_SERVER = '';
 
-export const APP_VERSION = '1.4.3';
+export const APP_VERSION = '1.4.7';
 
 // Shown on the About tab once set (leave empty to hide).
 export const GITHUB_URL = '';

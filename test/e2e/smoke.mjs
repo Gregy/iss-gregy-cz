@@ -11,13 +11,32 @@ const server = await startServer();
 // 127.0.0.2 is a secure context like localhost, but the service worker treats
 // it as production (its localhost shortcut only covers localhost/127.0.0.1)
 const origin = `http://127.0.0.2:${server.address().port}`;
-const browser = await chromium.launch();
+// let context.route() see the service worker's own requests (weather fetched on push)
+process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS = '1';
+// full Chromium (new headless): the lightweight headless shell always denies notifications
+const browser = await chromium.launch({ channel: 'chromium' });
 const ctx = await browser.newContext({
   viewport: { width: 1280, height: 800 }, locale: 'en-GB', timezoneId: 'Europe/Prague',
-  geolocation: { latitude: 50.36, longitude: 15.63 }, permissions: ['geolocation'],
+  geolocation: { latitude: 50.36, longitude: 15.63 }, permissions: ['geolocation', 'notifications'],
 });
-// no third-party services: weather, geocoding, imagery and other TLE sources are unavailable
-await ctx.route((url) => !url.href.startsWith(origin), (route) => route.abort());
+// No third-party services: geocoding, imagery and other TLE sources are
+// unavailable. Weather is unavailable too, unless a test sets `cloudCover`.
+let cloudCover = null;
+const weatherHits = [];
+await ctx.route((url) => !url.href.startsWith(origin), (route) => {
+  const url = route.request().url();
+  if (cloudCover == null || !url.startsWith('https://api.open-meteo.com/')) return route.abort();
+  weatherHits.push(url);
+  const t0 = Math.floor(Date.now() / 3600e3) * 3600 - 3600, n = 48;
+  const time = Array.from({ length: n }, (_, i) => t0 + i * 3600), all = (v) => time.map(() => v);
+  return route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ timezone: 'Europe/Prague', hourly: {
+      time, cloud_cover: all(cloudCover), cloud_cover_low: all(cloudCover), cloud_cover_mid: all(0), cloud_cover_high: all(0),
+      precipitation_probability: all(0), visibility: all(30000), weather_code: all(3),
+    } }),
+  });
+});
 
 const page = await ctx.newPage();
 const errors = [];
@@ -72,6 +91,9 @@ await step('alerts settings bound to their defaults', async () => {
 await step('about page shows the version', async () => {
   await page.goto(origin + '/#about');
   expect((await page.textContent('#appVersion')) === VERSION, 'version');
+  await page.click('details.log summary >> text=Background check log');
+  expect(await page.isVisible('#logEmpty'), 'empty check log explained');
+  expect((await page.$$('#logList li')).length === 0, 'no placeholder entries in the log list');
 });
 
 await step('works offline once installed', async () => {
@@ -82,6 +104,48 @@ await step('works offline once installed', async () => {
   await page.goto(origin + '/#live');
   await waitLive();
   await ctx.setOffline(false);
+});
+
+await step('"look up now" alert re-checks the clouds before showing', async () => {
+  cloudCover = 90;
+  const cdp = await ctx.newCDPSession(page);
+  const registered = new Promise((resolve) => cdp.on('ServiceWorker.workerRegistrationUpdated', ({ registrations }) => {
+    const r = registrations.find((x) => x.scopeURL.startsWith(origin) && !x.isDeleted);
+    if (r) resolve(r.registrationId);
+  }));
+  await cdp.send('ServiceWorker.enable');
+  const registrationId = await registered;
+  const start = Date.now() + 10 * 60e3;
+  const alert = {
+    title: '🛰️ ISS in 10 min, look W', body: 'Appears 18:00 in the W.\nmag -3.0 · clouds 10% · score 80', tag: 'e2e-pass', url: origin + '/#pass=e2e-pass',
+    kind: 'lead', check: { t: [start, start + 150e3, start + 300e3], geo: 0.9, score: 80 },
+  };
+  // push "on" (without a relay) so the re-sync that follows every alert leaves a trace
+  await page.evaluate(async () => (await import('/js/core/store.js')).saveSettings({ pushEnabled: true }));
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data: JSON.stringify(alert) });
+  let shown;
+  for (let i = 0; i < 50 && !shown; i++) {
+    shown = await page.evaluate(async () => {
+      const [n] = await (await navigator.serviceWorker.ready).getNotifications({ tag: 'e2e-pass' });
+      return n && { title: n.title, body: n.body };
+    });
+    if (!shown) await page.waitForTimeout(200);
+  }
+  expect(shown, 'notification shown');
+  expect(weatherHits.length > 0, `fresh forecast fetched (shown: ${shown.title})`);
+  expect(shown.title === '☁️ ISS in 10 min, look W, but 90% cloud now', `title: ${shown.title}`);
+  expect(shown.body.startsWith('Clouds moved in since this alert was booked'), `body: ${shown.body}`);
+  let check;
+  for (let i = 0; i < 25 && check?.source !== 'push'; i++) {
+    await page.waitForTimeout(200);
+    check = await page.evaluate(async () => (await import('/js/core/store.js')).get('lastCheck'));
+  }
+  expect(check?.source === 'push' && check.skipped === 'no relay configured', `re-sync after the alert: ${JSON.stringify(check)}`);
+  await page.evaluate(async () => {
+    (await import('/js/core/store.js')).saveSettings({ pushEnabled: false });
+    (await (await navigator.serviceWorker.ready).getNotifications()).forEach((n) => n.close());
+  });
+  cloudCover = null;
 });
 
 await step('updates cleanly to the next version (no mixed files)', async () => {

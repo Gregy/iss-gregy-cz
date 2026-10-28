@@ -48,6 +48,24 @@ export function weatherAt(w, t) {
 const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
 
 /**
+ * Forecast during a visible window, averaged over its start, peak and end
+ * (times in ms). Null when the window is beyond the forecast range.
+ */
+export function passWeather(weather, [start, max, end]) {
+  const samples = [start, max, end].map((t) => weatherAt(weather, t)).filter(Boolean);
+  if (!samples.length) return null;
+  const avg = (k) => samples.reduce((s, x) => s + (x[k] ?? 0), 0) / samples.length;
+  return {
+    cloud: avg('cloud'), low: avg('low'), mid: avg('mid'), high: avg('high'),
+    effective: avg('effective'), precip: avg('precip'),
+    code: weatherAt(weather, max)?.code,
+  };
+}
+
+/** The clear-sky score factor (0-1) for a pass's forecast. */
+export const clearSkyFactor = (wx) => Math.pow(1 - wx.effective / 100, 1.3) * (1 - 0.5 * (wx.precip / 100));
+
+/**
  * Score a visible pass 0-100: the product of four factors, each 0-1.
  * Height counts through brightness: low passes are farther away and dimmed by
  * more atmosphere.
@@ -66,17 +84,10 @@ export function scorePass(pass, weather) {
   const fDur = 0.6 + 0.4 * clamp(v.duration / 300);
   const geo = fMag * fDark * fDur;
 
-  // sample forecast at the start, peak and end of the visible window
-  const samples = [v.start.t, v.max.t, v.end.t].map((t) => weatherAt(weather, t)).filter(Boolean);
   const factors = { brightness: fMag, darkSky: fDark, duration: fDur, clearSky: null };
-  if (!samples.length) return { score: Math.round(geo * 100), geo: Math.round(geo * 100), sky: null, wx: null, factors };
-  const avg = (k) => samples.reduce((s, x) => s + (x[k] ?? 0), 0) / samples.length;
-  const wx = {
-    cloud: avg('cloud'), low: avg('low'), mid: avg('mid'), high: avg('high'),
-    effective: avg('effective'), precip: avg('precip'),
-    code: weatherAt(weather, v.max.t)?.code,
-  };
-  const sky = Math.pow(1 - wx.effective / 100, 1.3) * (1 - 0.5 * (wx.precip / 100));
+  const wx = passWeather(weather, [v.start.t, v.max.t, v.end.t]);
+  if (!wx) return { score: Math.round(geo * 100), geo: Math.round(geo * 100), sky: null, wx: null, factors };
+  const sky = clearSkyFactor(wx);
   factors.clearSky = sky;
   return { score: Math.round(geo * sky * 100), geo: Math.round(geo * 100), sky: Math.round(sky * 100), wx, factors };
 }

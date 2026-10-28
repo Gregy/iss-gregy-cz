@@ -1,7 +1,7 @@
 // Service worker (ES module): offline app shell, map tile cache, push
 // notifications from the relay, and a background re-sync of the alert schedule
 // (fresh forecast) driven by Periodic Background Sync.
-import { syncPush } from './js/core/alerts.js';
+import { syncPush, freshenLeadAlert } from './js/core/alerts.js';
 import { forget, subscribe } from './js/core/push.js';
 import * as store from './js/core/store.js';
 import { APP_VERSION } from './js/config.js';
@@ -55,9 +55,13 @@ self.addEventListener('fetch', (e) => {
       const c = await caches.open(TILES);
       const hit = await c.match(req);
       if (hit) return hit;
-      const res = await fetch(req);
-      if (res.ok && res.type === 'cors') { await c.put(req, res.clone()); trimTiles(); }
-      return res;
+      try {
+        const res = await fetch(req);
+        if (res.ok && res.type === 'cors') { await c.put(req, res.clone()); trimTiles(); }
+        return res;
+      } catch {
+        return Response.error(); // offline or GIBS hiccup: the map layer retries
+      }
     })());
     return;
   }
@@ -86,22 +90,29 @@ const sameOrigin = (url) => {
   try { return new URL(url, self.registration.scope).origin === self.location.origin; } catch { return false; }
 };
 
+const backgroundSync = (source, opts = {}) => syncPush({
+  source, baseUrl: self.registration.scope, registration: self.registration, ...opts,
+});
+
 self.addEventListener('push', (e) => {
   let d;
   try { d = e.data.json(); } catch { d = { title: 'ISS Pass Tracker', body: e.data?.text() || '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'ISS Pass Tracker', {
-    body: d.body,
-    tag: d.tag,
-    renotify: !!d.tag,
-    requireInteraction: d.kind === 'lead', // "look up now" should stay until dismissed
-    icon: 'icons/icon-192.png',
-    badge: 'icons/badge-96.png',
-    data: { url: d.url && sameOrigin(d.url) ? d.url : self.registration.scope },
-  }));
-});
-
-const backgroundSync = (source, force = false) => syncPush({
-  source, force, baseUrl: self.registration.scope, registration: self.registration,
+  e.waitUntil((async () => {
+    // "look up now": re-check the clouds first (a few seconds at most)
+    d = await freshenLeadAlert(d).catch(() => d);
+    await self.registration.showNotification(d.title || 'ISS Pass Tracker', {
+      body: d.body,
+      tag: d.tag,
+      renotify: !!d.tag,
+      requireInteraction: d.kind === 'lead', // "look up now" should stay until dismissed
+      icon: 'icons/icon-192.png',
+      badge: 'icons/badge-96.png',
+      data: { url: d.url && sameOrigin(d.url) ? d.url : self.registration.scope },
+    });
+    // Any alert is also a chance to re-book with the latest forecast, e.g. a
+    // heads-up cancels the later "look up now" if the pass has clouded over.
+    await backgroundSync('push', { weatherMaxAge: 10 * 60e3 }).catch(() => {});
+  })());
 });
 
 self.addEventListener('periodicsync', (e) => {
@@ -117,7 +128,7 @@ self.addEventListener('pushsubscriptionchange', (e) => {
     try {
       if (e.oldSubscription) await forget(settings.pushServer, e.oldSubscription.toJSON()).catch(() => {});
       if (!e.newSubscription) await subscribe(self.registration);
-      await backgroundSync('subscription-change', true);
+      await backgroundSync('subscription-change', { force: true });
     } catch (err) {
       await store.log('subscription-change', 'failed: ' + (err.message || err));
     }

@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scorePass, scoreLabel } from '../../js/core/weather.js';
-import { qualifies, buildSchedule } from '../../js/core/alerts.js';
+import { scorePass, scoreLabel, passWeather, clearSkyFactor } from '../../js/core/weather.js';
+import { qualifies, buildSchedule, leadAlertUpdate } from '../../js/core/alerts.js';
+
+// hourly forecast with the same cloud cover all day
+const forecast = (cloudPct, from = Date.parse('2026-11-01T00:00:00Z')) => {
+  const n = 48, time = Array.from({ length: n }, (_, i) => from + i * 3600e3), all = (v) => time.map(() => v);
+  return { time, cloud: all(cloudPct), low: all(cloudPct), mid: all(0), high: all(0), precip: all(0), visibility: all(30000), code: all(3) };
+};
 
 const pass = ({ mag = -3.5, sunAlt = -15, duration = 300, el = 60, start = Date.parse('2026-11-01T17:00:00Z') } = {}) => ({
   id: 'p1',
@@ -65,4 +71,37 @@ test('buildSchedule: lead and heads-up alerts inside the booking window', () => 
   assert.ok(alerts.every((a) => a.url === 'https://example.org/#pass=p1'));
   // past alert times are not booked
   assert.equal(buildSchedule([p], settings, { tz: 'Europe/Prague' }, 'https://example.org/', p.visible.start.t - 5 * 60e3).length, 0);
+});
+
+test('clear-sky factor: forecast during the pass', () => {
+  const p = pass();
+  assert.equal(scorePass(p, forecast(0)).score, 100);
+  const half = scorePass(p, forecast(50));
+  assert.equal(half.factors.clearSky, clearSkyFactor(passWeather(forecast(50), [p.visible.start.t, p.visible.max.t, p.visible.end.t])));
+  assert.ok(half.score > 35 && half.score < 45, `50% cloud scores about 40: ${half.score}`);
+  assert.equal(scorePass(p, forecast(100)).score, 0);
+  assert.equal(passWeather(forecast(0, 0), [Date.parse('2030-01-01'), Date.parse('2030-01-01'), Date.parse('2030-01-01')]), null, 'beyond the forecast');
+});
+
+test('lead alert carries what is needed to re-score it on arrival', () => {
+  const p = pass(); p.rating = scorePass(p, forecast(10));
+  const now = p.visible.start.t - 3600e3;
+  const [lead] = buildSchedule([p], { ...settings, headsUpHours: 0 }, { tz: 'Europe/Prague' }, 'https://example.org/', now);
+  assert.equal(lead.kind, 'lead');
+  assert.deepEqual(lead.check.t, [p.visible.start.t, p.visible.max.t, p.visible.end.t]);
+  assert.equal(lead.check.score, p.rating.score);
+  // re-scoring with the booking-time forecast gives the booked score
+  assert.equal(Math.round(lead.check.geo * clearSkyFactor(passWeather(forecast(10), lead.check.t)) * 100), lead.check.score);
+});
+
+test('lead alert re-checked at delivery: clouded over vs still clear', () => {
+  const p = pass(); p.rating = scorePass(p, forecast(0));
+  const [lead] = buildSchedule([p], { ...settings, headsUpHours: 0 }, { tz: 'Europe/Prague' }, 'https://example.org/', p.visible.start.t - 3600e3);
+  const clear = leadAlertUpdate(lead, passWeather(forecast(5), lead.check.t), 30);
+  assert.equal(clear.title, lead.title, 'still good: title unchanged');
+  assert.match(clear.body, /Latest forecast: 5% cloud, score \d+\.$/);
+  const cloudy = leadAlertUpdate(lead, passWeather(forecast(90), lead.check.t), 30);
+  assert.match(cloudy.title, /^☁️ ISS in 10 min, look W, but 90% cloud now$/);
+  assert.match(cloudy.body, /^Clouds moved in since this alert was booked \(score now \d+, was 100\)/);
+  assert.ok(cloudy.body.endsWith(lead.body), 'keeps the pass details');
 });
