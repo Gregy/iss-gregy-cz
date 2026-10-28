@@ -90,6 +90,8 @@ await step('visible passes listed with scores', async () => {
   await page.waitForSelector('#passList .pass', { timeout: 15000 }).catch(async (e) => {
     throw new Error(`${e.message.split('\n')[0]}\n    pass list says: ${await page.textContent('#passList')}`);
   });
+  const head = await page.textContent('#passList .list-head');
+  expect(/^\d+ visible pass(es)? in the next 10 days, until /.test(head), `list says how far ahead: ${head}`);
   await page.click('#passList .pass summary');
   const factors = await page.$eval('.pass[open] .factors', (e) => e.innerText);
   expect(/Brightness/.test(factors) && /Duration/.test(factors) && !/Height/.test(factors), `factor rows: ${factors}`);

@@ -77,7 +77,7 @@ export const uploadSchedule = (sub, prepared) =>
 
 export async function sendTest(sub, baseUrl) {
   const json = sub.toJSON();
-  const payload = JSON.stringify({ title: 'ISS Pass Tracker test notification', body: 'Push notifications through your relay work.', tag: 'test', url: baseUrl, kind: 'info' });
+  const payload = JSON.stringify({ title: 'ISS Pass Tracker test notification', body: 'Test notification', tag: 'test', url: baseUrl, kind: 'info' });
   const message = await prepareMessage(json, payload, await deviceKey(), { exp: Math.floor(Date.now() / 1000) + TOKEN_LIFETIME, subject: subject(baseUrl) });
   return call('POST', '/api/send', { ...identity(json), message });
 }

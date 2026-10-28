@@ -12,6 +12,7 @@ import { skyChart } from './ui/skychart.js';
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const APP_URL = new URL('./', location.href).href;
+const PASS_DAYS = 10; // how far ahead the Visible passes list goes
 
 const state = {
   loc: null,
@@ -285,8 +286,9 @@ function renderPasses() {
   if (!state.passes.length) { list.innerHTML = '<p class="empty">Computing passes…</p>'; return; }
   const now = Date.now();
   const items = state.passes.filter((p) => p.visible && p.visible.end.t > now);
-  if (!items.length) { list.innerHTML = '<p class="empty">No visible passes in the next 10 days. Around the solstices, or at high latitudes, the ISS can stay in sunlight or in Earth\'s shadow for days.</p>'; return; }
-  let html = '', day = '';
+  const until = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz() }).format(state.passesUntil);
+  if (!items.length) { list.innerHTML = `<p class="empty">No visible passes in the next ${PASS_DAYS} days (until ${until}). Around the solstices, or at high latitudes, the ISS can stay in sunlight or in Earth's shadow for days.</p>`; return; }
+  let html = `<p class="list-head">${items.length} visible pass${items.length === 1 ? '' : 'es'} in the next ${PASS_DAYS} days, until ${until}</p>`, day = '';
   for (const p of items) {
     const t = p.visible.start.t;
     const d = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'short', timeZone: tz() }).format(t);
@@ -312,9 +314,11 @@ async function sharePass(id) {
 async function refreshForecast({ forceTle = false } = {}) {
   if (!state.loc) return;
   try {
-    const f = await computeForecast(state.loc, { forceTle });
+    const from = Date.now();
+    const f = await computeForecast(state.loc, { forceTle, from, hours: PASS_DAYS * 24 });
     state.tle = f.tle;
     state.passes = f.passes;
+    state.passesUntil = from + PASS_DAYS * 86400e3;
     state.weather = f.weather;
     if (f.weather?.timezone) state.loc.tz = f.weather.timezone;
     renderTleInfo();
