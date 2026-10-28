@@ -72,18 +72,20 @@ npm install
 npx wrangler login                     # opens the browser
 npx wrangler d1 create iss-push        # copy the database_id into wrangler.toml
 ```
-In `wrangler.toml`, set `ALLOWED_ORIGINS` to your Pages origin (e.g. `https://<user>.github.io`). Then:
+In `wrangler.toml`, set `ALLOWED_ORIGINS` to the app's origin and `routes` to the relay's hostname. This repo is set up for `https://iss.gregy.cz` and `push.iss.gregy.cz` as a Workers Custom Domain, which needs the zone on the same Cloudflare account; Cloudflare creates the DNS record and certificate. Without your own domain, remove `routes` and `workers_dev = false` to get `https://iss-push.<subdomain>.workers.dev`. Then:
 ```sh
 npx wrangler d1 migrations apply iss-push --remote
-npx wrangler deploy                     # prints https://iss-push.<account>.workers.dev
+npx wrangler deploy
 ```
-There are no keys to generate or secrets to store. The `[[ratelimits]]` block is optional; remove it if your account doesn't offer the binding.
+Cron triggers need the account to have a `workers.dev` subdomain even when the worker doesn't use it: opening **Workers & Pages** in the dashboard once creates one. New cron triggers can take a few minutes to start.
+
+There are no keys to generate or secrets to store. The `[[ratelimits]]` block works on the free plan; if your account doesn't offer it, remove the block and the worker skips the check.
 
 To deploy automatically on push instead, add repo secrets `CLOUDFLARE_API_TOKEN` (template "Edit Cloudflare Workers" plus D1 edit) and `CLOUDFLARE_ACCOUNT_ID`. The `Push relay` workflow tests the relay, then applies migrations and deploys it.
 
 ### 2. App (GitHub Pages)
 1. Push this repo to GitHub (branch `main`).
-2. **Settings → Secrets and variables → Actions → Variables**: add `PUSH_SERVER` = your worker URL.
+2. The relay URL is `PUSH_SERVER` in `js/config.js`. To override it per deployment, add a repository variable `PUSH_SERVER` under **Settings → Secrets and variables → Actions → Variables**.
 3. **Settings → Pages → Source: GitHub Actions.**
 4. The `Deploy to GitHub Pages` workflow publishes on every push and every 6 h. Each run refreshes `data/iss.tle` and writes `PUSH_SERVER` into `js/config.js`.
    GitHub disables scheduled workflows after 60 days without repo activity. The app still works without them, because it fetches CelesTrak directly.

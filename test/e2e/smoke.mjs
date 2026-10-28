@@ -120,7 +120,7 @@ await step('"look up now" alert re-checks the clouds before showing', async () =
     title: '🛰️ ISS in 10 min, look W', body: 'Appears 18:00 in the W.\nmag -3.0 · clouds 10% · score 80', tag: 'e2e-pass', url: origin + '/#pass=e2e-pass',
     kind: 'lead', check: { t: [start, start + 150e3, start + 300e3], geo: 0.9, score: 80 },
   };
-  // push "on" (without a relay) so the re-sync that follows every alert leaves a trace
+  // push "on" (but not subscribed) so the re-sync that follows every alert leaves a trace
   await page.evaluate(async () => (await import('/js/core/store.js')).saveSettings({ pushEnabled: true }));
   await cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data: JSON.stringify(alert) });
   let shown;
@@ -140,7 +140,7 @@ await step('"look up now" alert re-checks the clouds before showing', async () =
     await page.waitForTimeout(200);
     check = await page.evaluate(async () => (await import('/js/core/store.js')).get('lastCheck'));
   }
-  expect(check?.source === 'push' && check.skipped === 'no relay configured', `re-sync after the alert: ${JSON.stringify(check)}`);
+  expect(check?.source === 'push' && check.skipped === 'not subscribed', `re-sync after the alert: ${JSON.stringify(check)}`);
   await page.evaluate(async () => {
     (await import('/js/core/store.js')).saveSettings({ pushEnabled: false });
     (await (await navigator.serviceWorker.ready).getNotifications()).forEach((n) => n.close());
