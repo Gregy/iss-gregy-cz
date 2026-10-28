@@ -2,6 +2,8 @@
 
 Live ISS position, visible-pass predictions scored by **weather + sky darkness + geometry**, and push alerts for good passes. The app is a static site with no build step and runs on GitHub Pages. Push alerts go through a small relay running on Cloudflare Workers' free plan. The relay holds no keys and can't read the notifications.
 
+**Live at [iss.gregy.cz](https://iss.gregy.cz)** (relay: `push.iss.gregy.cz`).
+
 ## Features
 
 - **Live map**: ISS position, ground track (yellow = sunlit, blue = in Earth's shadow), the area it can be seen from, and your location. The day side shows NASA Blue Marble and the night side Black Marble city lights, blended across twilight using the sun's real position.
