@@ -550,7 +550,7 @@ async function renderAlertStatus() {
       perm === 'granted' ? li('ok', 'Notification permission granted') : li('bad', `Notification permission: ${perm}`),
       sub ? li('ok', `Subscribed via ${esc(hostOf(sub.endpoint))}`) : li('bad', 'No push subscription. Toggle off and on again.'),
       lastLine,
-      ps === 'registered' ? li('ok', 'Background forecast refresh active')
+      ps === 'registered' ? li('ok', "Background forecast refresh active: about once a day. Chrome pauses it if the app isn't used for a few weeks.")
         // Firefox and Safari: no Periodic Background Sync at all, installed or not
         : ps === 'unsupported' ? li('warn', `${isIOS() ? 'No background refresh on iPhone.'
           : 'No background refresh in this browser. For hands-off alerts, use the app installed from Chrome or Edge.'}<br>${withoutRefresh(s.horizonHours)}`)

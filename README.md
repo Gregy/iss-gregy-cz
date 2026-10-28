@@ -33,7 +33,7 @@ for each alert:
 - Every sync uploads the **complete** list, so a pass that clouds over is cancelled exactly; nothing is sent.
 - **At-most-once delivery:** the cron claims rows before sending. A crash, timeout or overlapping run can lose an alert, never duplicate it. Only explicit 429/5xx answers are retried. Alerts more than 10 minutes late are dropped.
 - Delivery is within ±30 s of the booked time.
-- The schedule is re-synced whenever the app is opened, whenever an alert arrives (the service worker is awake anyway: a heads-up thus refreshes the later "look up now" alert, or cancels it), and in the background via Periodic Background Sync when the app is installed (Chrome/Android decides how often, usually every 12–24 h). A shorter booking window ("Book alerts up to") means fresher forecasts.
+- The schedule is re-synced whenever the app is opened, whenever an alert arrives (the service worker is awake anyway: a heads-up thus refreshes the later "look up now" alert, or cancels it), and in the background via Periodic Background Sync when the app is installed in Chrome or Edge (about once a day; see [Background refresh and site engagement](#background-refresh-and-site-engagement)). The booking window ("Book alerts up to") is at least 48 h so one late or skipped refresh doesn't leave a gap.
 - A "look up now" alert carries its pass's times and score factors. On arrival the service worker fetches a fresh forecast (4 s at most) and re-scores the pass: if it has dropped below your minimum score the notification says the clouds moved in, otherwise it adds the latest cloud cover. It can't be suppressed: browsers require every push to show a notification, which also rules out silent "wake up and refresh" pushes.
 
 **Multiple users.** Each browser subscription is one user, with no accounts. Rows are keyed by subscription, so one user's uploads can never touch another's. The subscription's `auth` secret acts as its password: only its hash is stored, and changes need the same secret. The relay protects itself with:
@@ -42,6 +42,39 @@ for each alert:
 - a cap on total subscriptions (`MAX_SUBSCRIPTIONS`);
 - per-subscription limits (60 alerts, 4 KB each);
 - fair batching (at most 3 messages per subscription per cron run).
+
+### Background refresh and site engagement
+
+Periodic Background Sync exists only in Chromium browsers (Chrome, Edge, Samsung Internet…) and only for installed apps. Firefox and every iOS browser don't have it; there the schedule is renewed only when the app is opened or an alert arrives.
+
+Chrome doesn't honour the requested interval. How often it fires depends on the site's **engagement score** ([design doc](https://www.chromium.org/developers/design-documents/site-engagement/)). Values below are Chromium's defaults, read from the source (`components/site_engagement/content/site_engagement_score.cc`, `chrome/browser/background_sync/background_sync_delegate_impl.{h,cc}`, `content/public/browser/background_sync_parameters.cc`):
+
+**The score** (per site, 0–100):
+
+| Event | Points |
+|---|---|
+| first engagement of the day | +1.5 |
+| navigation the user starts (typed URL, bookmark, launching the installed app) | +1.5 |
+| user input (tap, scroll, key press) | +0.6 each |
+| interacting with one of the site's notifications | +1 |
+| visible / hidden media playback | +0.06 / +0.01 |
+| daily maximum | 15 |
+| installed-app bonus: launched from its icon within the last 10 days | +5 (added on read, not stored) |
+
+Every 2 hours without engagement the stored score is multiplied by 0.984: about −18 % a day, a half-life of about 3.6 days. A score below 0.5 is deleted, i.e. becomes 0.
+
+**What the score does to background refresh.** The interval is Chrome's minimum of 12 h times a penalty (the app's own `minInterval` of 6 h is overridden):
+
+| Engagement level | Score | Background refresh |
+|---|---|---|
+| none | 0 | suspended until the score rises again |
+| minimal | 0–1 | every 36 h |
+| low / medium | 1–50 | every 24 h |
+| high / max | 50 and more | every 12 h |
+
+**In practice.** An app launched from its icon within the last 10 days has at least the +5 bonus, so it refreshes about once a day; reaching "high" takes near-maximum use every day, so assume 24 h. Not opened for more than 10 days, the bonus lapses and the score decays: a day of normal use is gone in roughly 2–3 weeks, after which Chrome stops waking the app. Arriving alerts keep re-booking the next 48 h regardless, so alerts stop only if both happen: weeks without opening the app and more than 48 h without any alert (e.g. a cloudy spell). Opening the app once restarts everything. The page can't read the score, so the app can't tell when Chrome has suspended refresh.
+
+Hence the 48 h minimum booking window: a daily refresh renews it with a day to spare; a 24 h window would lapse after a single late refresh.
 
 ## How it works
 

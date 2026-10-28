@@ -35,13 +35,16 @@ export const DEFAULT_SETTINGS = {
   notifyTo: 1320,
   leadMinutes: 10,
   headsUpHours: 0, // extra notification this many hours before a good pass (0 = off)
-  horizonHours: 48, // how far ahead alerts are booked on the relay
+  horizonHours: 48, // how far ahead alerts are booked on the relay (at least 48: see README, background refresh)
   pushEnabled: false,
 };
 
 export async function getSettings() {
   const { pushServer, ...saved } = (await get('settings')) || {}; // pushServer: no longer a setting
-  return { ...DEFAULT_SETTINGS, ...saved };
+  const s = { ...DEFAULT_SETTINGS, ...saved };
+  // 24 h was an option once; Chrome's background refresh runs about daily, so a 24 h window leaves gaps
+  s.horizonHours = Math.max(48, s.horizonHours);
+  return s;
 }
 
 /** Stores only explicitly changed values, so new defaults reach existing installs. */
