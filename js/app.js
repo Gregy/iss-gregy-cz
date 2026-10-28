@@ -85,6 +85,7 @@ async function setLocation(loc) {
   $('#locName').textContent = loc.name || `${fmtLat(loc.lat)}, ${fmtLon(loc.lon)}`;
   state.observer = makeObserver(loc.lat, loc.lon, loc.height || 0);
   state.map?.setObserver(state.loc);
+  renderAlertStatus(); // notifications can be turned on now
   await refreshForecast();
 }
 
@@ -393,6 +394,7 @@ function setupAlertsView() {
     box.disabled = true;
     try {
       if (box.checked) {
+        if (!state.loc) throw new Error('Set your location first: alerts are for passes over your location');
         if (!state.reg || !('PushManager' in window)) throw new Error('Push is not supported in this browser');
         if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notification permission denied');
         await withSyncLock(() => subscribe(state.reg));
@@ -471,8 +473,11 @@ async function renderAlertStatus() {
     : last.error ? li('bad', `Last sync failed (${when(last.t)}): ${esc(last.error)}`)
       : last.skipped ? li('warn', `Last sync skipped (${when(last.t)}): ${esc(last.skipped)}`)
         : li('ok', `Synced ${when(last.t)} (${esc(last.source)}): ${last.booked ?? 0} alert(s) booked${last.next ? `, next ${when(last.next)}` : ''}`);
+  // turning on needs a location; turning off always works
+  $('#pushEnabled').disabled = !state.loc && !s.pushEnabled;
   $('#pushStatus').innerHTML = !s.pushEnabled
     ? [
+      !state.loc ? li('warn', 'Set your location first (the 📍 button at the top): alerts are for passes over your location.') : '',
       perm === 'denied' ? li('bad', 'Notifications are blocked for this site in browser settings') : '',
     ].join('')
     : [
@@ -563,8 +568,8 @@ async function boot() {
     if (document.visibilityState === 'visible' && state.loc) refreshForecast();
   });
 
+  // no location yet: the header badge says "Set your location"; nothing is asked for unprompted
   if (state.loc) refreshForecast();
-  else $('#locDialog').showModal();
 }
 
 boot();

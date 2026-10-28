@@ -61,14 +61,28 @@ const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 const liveStats = () => page.evaluate(() => ['sLat', 'sLon', 'sAlt'].map((id) => document.getElementById(id).textContent));
 const waitLive = () => page.waitForFunction(() => document.getElementById('sLat').textContent !== '–' && document.querySelector('.iss-icon'), null, { timeout: 15000 });
 
-await step('first visit: set location, live ISS position', async () => {
+await step('first visit: nothing asked unprompted, notifications need a location', async () => {
   await page.goto(origin + '/');
+  await page.waitForSelector('.iss-icon', { timeout: 15000 });
+  expect(!(await page.evaluate(() => document.getElementById('locDialog').open)), 'location dialog not opened by itself');
+  expect((await page.textContent('#locName')) === 'Set your location', 'badge asks for a location');
+  await page.goto(origin + '/#alerts');
+  await page.waitForFunction(() => document.getElementById('pushEnabled').disabled, null, { timeout: 5000 });
+  expect((await page.textContent('#pushStatus')).includes('Set your location first'), 'status explains why');
+});
+
+await step('set location from the badge, live ISS position', async () => {
+  await page.goto(origin + '/');
+  await page.click('#locBtn');
   await page.click('#geoBtn');
   await waitLive();
   const [lat, lon, alt] = await liveStats();
   expect(/°[NS]$/.test(lat) && /°[EW]$/.test(lon), `lat/lon shown: ${lat} ${lon}`);
   const km = parseFloat(alt);
   expect(km > 350 && km < 460, `ISS altitude plausible: ${alt}`);
+  expect((await page.textContent('#locName')) !== 'Set your location', 'badge shows the place');
+  await page.goto(origin + '/#alerts');
+  await page.waitForFunction(() => !document.getElementById('pushEnabled').disabled, null, { timeout: 5000 });
 });
 
 await step('visible passes listed with scores', async () => {

@@ -44,6 +44,11 @@ h2 { font-size: 1.02rem; margin: 0 0 .6rem; font-weight: 650; }
   border-radius: 999px; padding: .4rem .8rem; font: inherit; font-size: .88rem;
   max-width: 55vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
 }
+/* phones: the icon alone names the app, the location badge gets the room */
+@media (max-width: 420px) {
+  .brand span { display: none; }
+  .chip { max-width: calc(100vw - 80px); }
+}
 
 main { flex: 1; min-height: 0; position: relative; }
 .view { position: absolute; inset: 0; overflow-y: auto; padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 16px); }
@@ -213,6 +218,8 @@ input:not([type]), input[type=url], input[type=search], select {
 .switch input:checked + span { background: rgba(255, 209, 102, .25); border-color: var(--accent); }
 .switch input:checked + span::after { transform: translateX(18px); background: var(--accent); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.switch:has(input:disabled) { cursor: not-allowed; }
+.switch input:disabled + span { opacity: .4; }
 .status { list-style: none; padding: 0; margin: .4rem 0 .8rem; font-size: .84rem; }
 .status li { padding: .2rem 0; display: flex; gap: .5rem; }
 .status .ok { color: var(--exc); } .status .warn { color: var(--fair); } .status .bad { color: var(--danger); }
