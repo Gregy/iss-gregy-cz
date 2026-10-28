@@ -260,6 +260,8 @@ input:not([type]), input[type=url], input[type=search], select {
 .switch input:disabled + span { opacity: .4; }
 .status { list-style: none; padding: 0; margin: .4rem 0 .8rem; font-size: .84rem; }
 .status li { padding: .2rem 0; display: flex; gap: .5rem; }
+.status li > span:first-child { flex: 0 0 1.1em; text-align: center; font-weight: 700; } /* icons of different widths, text in one column */
+.btn.small { padding: .3rem .7rem; font-size: .8rem; border-radius: 8px; margin: .3rem 0 .1rem; }
 .status .ok { color: var(--exc); } .status .warn { color: var(--fair); } .status .bad { color: var(--danger); } .status .info { color: var(--muted); }
 .log summary { cursor: pointer; color: var(--muted); font-size: .84rem; margin-top: .6rem; }
 .log ul { font-size: .76rem; color: var(--muted); list-style: none; padding-left: 0; font-variant-numeric: tabular-nums; }

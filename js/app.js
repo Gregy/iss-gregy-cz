@@ -469,13 +469,18 @@ function setupAlertsView() {
   });
 
   $('#refreshTle').addEventListener('click', async () => { toast('Refreshing…'); await refreshForecast({ forceTle: true }); toast(`Orbit data from ${state.tle?.source}`); });
-  $('#installBtn').addEventListener('click', async () => {
-    if (!state.installEvt) return;
-    state.installEvt.prompt();
-    await state.installEvt.userChoice;
-    state.installEvt = null;
-    $('#installBtn').hidden = true;
-  });
+  $('#installBtn').addEventListener('click', promptInstall);
+  $('#pushStatus').addEventListener('click', (e) => { if (e.target.closest('[data-install]')) promptInstall(); });
+}
+
+/** The browser's own install dialog (Chrome/Edge offer it once the app is installable). */
+async function promptInstall() {
+  if (!state.installEvt) return;
+  state.installEvt.prompt();
+  await state.installEvt.userChoice;
+  state.installEvt = null;
+  $('#installBtn').hidden = true;
+  renderAlertStatus();
 }
 
 async function registerPeriodicSync() {
@@ -492,6 +497,12 @@ async function registerPeriodicSync() {
   }
 }
 
+/** What happens to alert bookings without scheduled background refresh. */
+function withoutRefresh(h, lower = false) {
+  const text = `Opening the app books alerts for the next ${h} h ("Book alerts up to"), and every alert that arrives books the next ${h} h again. If no alert arrives for longer than that and you don't open the app, nothing new gets booked.`;
+  return lower ? text[0].toLowerCase() + text.slice(1) : text;
+}
+
 async function renderAlertStatus() {
   const li = (cls, text) => `<li><span class="${cls}">${{ ok: '✔', warn: '!', info: 'ℹ' }[cls] ?? '✖'}</span><span>${text}</span></li>`;
   const standalone = matchMedia('(display-mode: standalone)').matches;
@@ -500,6 +511,8 @@ async function renderAlertStatus() {
   if (state.reg && 'periodicSync' in state.reg) {
     const tags = await state.reg.periodicSync.getTags().catch(() => []);
     ps = tags.includes('iss-check') ? 'registered' : (await navigator.permissions.query({ name: 'periodic-background-sync' }).catch(() => ({ state: 'unknown' }))).state;
+    // allowed (e.g. just installed) but not set up yet: set it up now
+    if (ps === 'granted' && state.settings.pushEnabled) ps = await registerPeriodicSync();
   }
   const last = await store.get('lastCheck');
   const sub = await getSubscription().catch(() => null);
@@ -522,8 +535,12 @@ async function renderAlertStatus() {
       lastLine,
       ps === 'registered' ? li('ok', 'Background forecast refresh active')
         // e.g. Firefox and Safari: no Periodic Background Sync at all, installed or not
-        : ps === 'unsupported' ? li('warn', `This browser has no scheduled background refresh. Opening the app books alerts for the next ${s.horizonHours} h ("Book alerts up to"), and every alert that arrives books the next ${s.horizonHours} h again. If no alert arrives for longer than that and you don't open the app, nothing new gets booked. For hands-off alerts, install the app from Chrome or Edge.`)
-          : li('warn', 'Background refresh inactive. Install the app to the home screen for fresher forecasts.'),
+        : ps === 'unsupported' ? li('warn', `This browser has no scheduled background refresh. ${withoutRefresh(s.horizonHours)} For hands-off alerts, install the app from Chrome or Edge.`)
+          // Chrome/Edge allow it only for installed apps
+          : !standalone ? li('warn', `Background refresh needs the app installed to your home screen. ${state.installEvt
+            ? '<button type="button" class="btn small" data-install>Install app</button>'
+            : 'Install it from the browser menu: ⋮ → <b>Install app</b> or <b>Add to Home screen</b>.'}<br>Until then: ${withoutRefresh(s.horizonHours, true)}`)
+            : li('warn', `Background refresh is blocked for this app. Allow it in the browser's site settings (<b>Background sync</b>). Until then: ${withoutRefresh(s.horizonHours, true)}`),
     ].join('');
   $('#appStatus').innerHTML = [
     standalone ? li('ok', 'Running as installed app')
@@ -583,7 +600,13 @@ async function boot() {
       if (state.settings.pushEnabled) registerPeriodicSync();
     } catch (e) { console.warn('SW registration failed', e); }
   }
-  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installEvt = e; $('#installBtn').hidden = false; });
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installEvt = e; $('#installBtn').hidden = false; renderAlertStatus(); });
+  window.addEventListener('appinstalled', async () => {
+    state.installEvt = null;
+    $('#installBtn').hidden = true;
+    if (state.settings.pushEnabled) await registerPeriodicSync();
+    renderAlertStatus();
+  });
 
   setInterval(() => state.map.updateDaylight(), 5 * 60e3);
 
