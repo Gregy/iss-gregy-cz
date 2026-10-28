@@ -497,11 +497,11 @@ async function registerPeriodicSync() {
   }
 }
 
-/** What happens to alert bookings without scheduled background refresh. */
-function withoutRefresh(h, lower = false) {
-  const text = `Opening the app books alerts for the next ${h} h ("Book alerts up to"), and every alert that arrives books the next ${h} h again. If no alert arrives for longer than that and you don't open the app, nothing new gets booked.`;
-  return lower ? text[0].toLowerCase() + text.slice(1) : text;
-}
+/** What happens to alert bookings without background refresh (h: the booking window). */
+const withoutRefresh = (h) => `Without it, alerts are booked only when you open the app or an alert arrives, ${h} h ahead each time, with the forecast from that moment. More than ${h} h with neither means no new alerts.`;
+
+// every iOS browser runs on Apple's engine, none has background refresh (iPadOS reports itself as a Mac)
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 async function renderAlertStatus() {
   const li = (cls, text) => `<li><span class="${cls}">${{ ok: '✔', warn: '!', info: 'ℹ' }[cls] ?? '✖'}</span><span>${text}</span></li>`;
@@ -534,13 +534,14 @@ async function renderAlertStatus() {
       sub ? li('ok', `Subscribed via ${esc(hostOf(sub.endpoint))}`) : li('bad', 'No push subscription. Toggle off and on again.'),
       lastLine,
       ps === 'registered' ? li('ok', 'Background forecast refresh active')
-        // e.g. Firefox and Safari: no Periodic Background Sync at all, installed or not
-        : ps === 'unsupported' ? li('warn', `This browser has no scheduled background refresh. ${withoutRefresh(s.horizonHours)} For hands-off alerts, install the app from Chrome or Edge.`)
+        // Firefox and Safari: no Periodic Background Sync at all, installed or not
+        : ps === 'unsupported' ? li('warn', `${isIOS() ? 'No background refresh on iPhone.'
+          : 'No background refresh in this browser. For hands-off alerts, use the app installed from Chrome or Edge.'}<br>${withoutRefresh(s.horizonHours)}`)
           // Chrome/Edge allow it only for installed apps
-          : !standalone ? li('warn', `Background refresh needs the app installed to your home screen. ${state.installEvt
+          : !standalone ? li('warn', `Background refresh needs the app installed. ${state.installEvt
             ? '<button type="button" class="btn small" data-install>Install app</button>'
-            : 'Install it from the browser menu: ⋮ → <b>Install app</b> or <b>Add to Home screen</b>.'}<br>Until then: ${withoutRefresh(s.horizonHours, true)}`)
-            : li('warn', `Background refresh is blocked for this app. Allow it in the browser's site settings (<b>Background sync</b>). Until then: ${withoutRefresh(s.horizonHours, true)}`),
+            : 'Use the browser menu: ⋮ → <b>Install app</b> or <b>Add to Home screen</b>.'}<br>${withoutRefresh(s.horizonHours)}`)
+            : li('warn', `Background refresh is blocked for this app. Allow <b>Background sync</b> in the browser's site settings.<br>${withoutRefresh(s.horizonHours)}`),
     ].join('');
   $('#appStatus').innerHTML = [
     standalone ? li('ok', 'Running as installed app')
