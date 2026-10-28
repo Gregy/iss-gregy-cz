@@ -40,10 +40,20 @@ export async function computeForecast(loc, { hours = 240, from = Date.now(), for
   return { tle, weather, observer, passes };
 }
 
-export function qualifies(p, s) {
+/** Minutes since midnight of time t in time zone tz (the device's zone if unset). */
+export function localMinutes(t, tz) {
+  const parts = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: tz }).formatToParts(t);
+  const get = (type) => Number(parts.find((x) => x.type === type).value);
+  return get('hour') * 60 + get('minute');
+}
+
+/** Does a pass meet the alert criteria? `tz` is the location's time zone, for the time-of-day window. */
+export function qualifies(p, s, tz) {
   const r = p.rating;
   if (!p.visible || !r) return false;
   if (p.visible.max.el < s.minElevation) return false;
+  const appears = localMinutes(p.visible.start.t, tz);
+  if (appears < s.notifyFrom || appears > s.notifyTo) return false;
   return r.score >= s.minScore;
 }
 
@@ -84,7 +94,7 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
   const horizon = now + settings.horizonHours * 3600e3;
   const out = [];
   for (const p of passes) {
-    if (!qualifies(p, settings)) continue;
+    if (!qualifies(p, settings, loc.tz)) continue;
     const v = p.visible;
     const d = describePass(p, loc.tz);
     const common = { tag: p.id, url: `${baseUrl}#pass=${p.id}`, body: `${d.path}\n${d.stats}` };
@@ -169,7 +179,7 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
     // without any forecast every pass would look clear; keep the previous bookings instead
     if (!weather) throw new Error('no weather forecast available, previous alerts kept');
     const alerts = buildSchedule(passes, settings, loc, baseUrl, now);
-    const good = passes.filter((p) => qualifies(p, settings)).length;
+    const good = passes.filter((p) => qualifies(p, settings, loc.tz)).length;
     const digest = PUSH_SERVER + sub.endpoint + JSON.stringify(alerts);
     const last = await store.get('push');
     if (!force && last?.digest === digest && now - last.t < RESYNC_UNCHANGED) {

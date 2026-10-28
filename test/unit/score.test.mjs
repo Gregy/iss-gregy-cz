@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scorePass, scoreLabel, passWeather, clearSkyFactor } from '../../js/core/weather.js';
-import { qualifies, buildSchedule, leadAlertUpdate } from '../../js/core/alerts.js';
+import { qualifies, buildSchedule, leadAlertUpdate, localMinutes } from '../../js/core/alerts.js';
 
 // hourly forecast with the same cloud cover all day
 const forecast = (cloudPct, from = Date.parse('2026-11-01T00:00:00Z')) => {
@@ -50,7 +50,7 @@ test('score labels', () => {
   assert.equal(scoreLabel(24).label, 'Poor');
 });
 
-const settings = { minElevation: 25, minScore: 30, leadMinutes: 10, headsUpHours: 2, horizonHours: 48 };
+const settings = { minElevation: 25, minScore: 30, notifyFrom: 0, notifyTo: 1440, leadMinutes: 10, headsUpHours: 2, horizonHours: 48 };
 
 test('qualifies: minimum height and minimum score', () => {
   const ok = pass(); ok.rating = scorePass(ok, null);
@@ -104,4 +104,29 @@ test('lead alert re-checked at delivery: clouded over vs still clear', () => {
   assert.match(cloudy.title, /^☁️ ISS in 10 min, look W, but 90% cloud now$/);
   assert.match(cloudy.body, /^Clouds moved in since this alert was booked \(score now \d+, was 100\)/);
   assert.ok(cloudy.body.endsWith(lead.body), 'keeps the pass details');
+});
+
+test('local time of day in the location\'s time zone', () => {
+  const t = Date.parse('2026-11-01T17:00:00Z'); // winter time: UTC+1 in Prague
+  assert.equal(localMinutes(t, 'Europe/Prague'), 18 * 60);
+  assert.equal(localMinutes(t, 'America/New_York'), 12 * 60);
+  assert.equal(localMinutes(Date.parse('2026-07-01T17:00:00Z'), 'Europe/Prague'), 19 * 60, 'summer time: UTC+2');
+});
+
+test('qualifies: time-of-day window on when the pass appears', () => {
+  const p = pass({ start: Date.parse('2026-11-01T04:30:00Z') }); // 05:30 in Prague
+  p.rating = scorePass(p, null);
+  const window = (from, to) => qualifies(p, { ...settings, notifyFrom: from, notifyTo: to }, 'Europe/Prague');
+  assert.ok(!window(360, 1320), '05:30 is outside the default 06:00-22:00');
+  assert.ok(window(300, 1320), 'inside 05:00-22:00');
+  assert.ok(window(330, 330), 'window edges are inclusive');
+  assert.ok(window(0, 1440), 'any time');
+  assert.ok(qualifies(p, { ...settings, notifyFrom: 360, notifyTo: 1320 }, 'Asia/Tokyo'), '13:30 in Tokyo: same pass, other time zone');
+});
+
+test('buildSchedule leaves out passes outside the time window', () => {
+  const early = pass({ start: Date.parse('2026-11-01T04:30:00Z') }); early.rating = scorePass(early, null); early.id = 'early';
+  const evening = pass({ start: Date.parse('2026-11-01T17:00:00Z') }); evening.rating = scorePass(evening, null); evening.id = 'evening';
+  const alerts = buildSchedule([early, evening], { ...settings, headsUpHours: 0, notifyFrom: 360, notifyTo: 1320 }, { tz: 'Europe/Prague' }, 'https://example.org/', Date.parse('2026-11-01T00:00:00Z'));
+  assert.deepEqual(alerts.map((a) => a.tag), ['evening']);
 });

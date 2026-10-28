@@ -97,9 +97,25 @@ await step('visible passes listed with scores', async () => {
 
 await step('alerts settings bound to their defaults', async () => {
   await page.goto(origin + '/#alerts');
-  const v = await page.evaluate(() => ['minElevation', 'minScore', 'leadMinutes', 'headsUpHours', 'horizonHours'].map((id) => document.getElementById(id).value));
-  expect(JSON.stringify(v) === JSON.stringify(['25', '30', '10', '0', '48']), `settings: ${v}`);
+  const v = await page.evaluate(() => ['minElevation', 'minScore', 'notifyFrom', 'notifyTo', 'leadMinutes', 'headsUpHours', 'horizonHours'].map((id) => document.getElementById(id).value));
+  expect(JSON.stringify(v) === JSON.stringify(['25', '30', '360', '1320', '10', '0', '48']), `settings: ${v}`);
   expect((await page.textContent('#criteriaPreview')).includes('visible passes'), 'criteria preview rendered');
+  expect((await page.textContent('#notifyWindowOut')) === '06:00 – 22:00', 'time window shown');
+});
+
+await step('time window: knobs move, may cross, and the setting is saved', async () => {
+  const out = () => page.textContent('#notifyWindowOut');
+  await page.focus('#notifyFrom');
+  await page.keyboard.press('ArrowRight'); // +30 min
+  await page.keyboard.press('ArrowRight');
+  expect((await out()) === '07:00 – 22:00', `earliest moved: ${await out()}`);
+  await page.focus('#notifyTo');
+  for (let i = 0; i < 32; i++) await page.keyboard.press('ArrowLeft'); // 22:00 → 06:00, past the other knob
+  expect((await out()) === '06:00 – 07:00', `knobs crossed: ${await out()}`);
+  const saved = await page.evaluate(async () => { const s = await (await import('/js/core/store.js')).getSettings(); return [s.notifyFrom, s.notifyTo]; });
+  expect(saved[0] === 360 && saved[1] === 420, `saved: ${saved}`);
+  // back to the defaults for the following steps
+  await page.evaluate(async () => (await import('/js/core/store.js')).saveSettings({ notifyFrom: 360, notifyTo: 1320 }));
 });
 
 await step('about page shows the version', async () => {

@@ -10,7 +10,7 @@ Live ISS position, visible-pass predictions scored by **weather + sky darkness +
 - **Where to look now**: azimuth/elevation from your location, plus whether the ISS is visible right now (sunlit, dark sky, high enough).
 - **Visible passes (10 days)**: sky chart for each pass, appear/peak/vanish times and directions, estimated brightness, and a 0–100 **score**:
   brightness × sky darkness × duration × **clear sky** (Open-Meteo low/mid/high cloud + rain probability).
-- **Push alerts** for passes that meet your criteria (minimum height, minimum score). They arrive at an exact time *N* minutes before the pass, with an optional heads-up a few hours earlier, even when the app is closed.
+- **Push alerts** for passes that meet your criteria (minimum height, minimum score, time of day). They arrive at an exact time *N* minutes before the pass, with an optional heads-up a few hours earlier, even when the app is closed.
 - **Works offline**: app shell, map tiles, orbit data and forecast are cached.
 
 ### How push works

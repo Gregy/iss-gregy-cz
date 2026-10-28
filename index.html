@@ -61,6 +61,12 @@
           <input type="range" id="minElevation" min="10" max="80" step="5"></div>
         <div class="field"><label for="minScore">Minimum score <output id="minScoreOut"></output></label>
           <input type="range" id="minScore" min="0" max="90" step="5"></div>
+        <div class="field"><label for="notifyFrom">Appears between <output id="notifyWindowOut"></output></label>
+          <div class="dual" id="notifyWindow">
+            <input type="range" id="notifyFrom" min="0" max="1440" step="30" aria-label="Earliest time">
+            <input type="range" id="notifyTo" min="0" max="1440" step="30" aria-label="Latest time">
+          </div>
+          <div class="scale" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div></div>
         <p class="hint" id="criteriaPreview"></p>
       </div>
 

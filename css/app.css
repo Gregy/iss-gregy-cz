@@ -206,7 +206,44 @@ path.observer { stroke: #fff; stroke-width: 2; fill: #f472b6; fill-opacity: 1; }
 .field { margin: .75rem 0; }
 .field label { display: flex; justify-content: space-between; font-size: .86rem; margin-bottom: .3rem; }
 .field output { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
-input[type=range] { width: 100%; accent-color: var(--accent); }
+/* Sliders: grey track, yellow fill between --a and --b (fractions 0-1), yellow knobs.
+   The fill stops are offset by half a knob, matching where the browser draws the knob. */
+input[type=range] {
+  --a: -1; --b: 0; --knob: 18px; /* --a below 0: single sliders fill from the very start of the track */
+  -webkit-appearance: none; appearance: none; width: 100%; height: 24px; margin: 0; background: transparent; cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right,
+    var(--line) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--a)), var(--accent) 0,
+    var(--accent) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--b)), var(--line) 0);
+}
+input[type=range]::-moz-range-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right,
+    var(--line) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--a)), var(--accent) 0,
+    var(--accent) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--b)), var(--line) 0);
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: var(--knob); height: var(--knob); margin-top: calc(2px - var(--knob) / 2);
+  border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent);
+}
+input[type=range]::-moz-range-thumb {
+  width: calc(var(--knob) - 4px); height: calc(var(--knob) - 4px);
+  border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent);
+}
+input[type=range]:focus-visible { outline: none; }
+input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-2); }
+input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--accent-2); }
+
+/* two knobs on one track: only the knobs take the pointer; the second track is see-through */
+.dual { position: relative; height: 24px; }
+.dual input { position: absolute; inset: 0; pointer-events: none; --a: inherit; --b: inherit; }
+.dual input::-webkit-slider-thumb { pointer-events: auto; }
+.dual input::-moz-range-thumb { pointer-events: auto; }
+.dual input + input::-webkit-slider-runnable-track { background: none; }
+.dual input + input::-moz-range-track { background: none; }
+.scale { display: flex; justify-content: space-between; font-size: .7rem; color: var(--muted); padding: 0 2px; font-variant-numeric: tabular-nums; }
 input:not([type]), input[type=url], input[type=search], select {
   width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line);
   border-radius: 10px; padding: .55rem .7rem; font: inherit;

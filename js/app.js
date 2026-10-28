@@ -199,7 +199,7 @@ function renderNextPass() {
   const box = $('#nextPass');
   const now = Date.now();
   const next = state.passes.find((p) => p.visible && p.visible.end.t > now);
-  const good = state.passes.find((p) => p.visible && p.visible.end.t > now && qualifies(p, state.settings));
+  const good = state.passes.find((p) => p.visible && p.visible.end.t > now && qualifies(p, state.settings, tz()));
   state.nextPass = next;
   if (!state.observer) { box.innerHTML = ''; return; }
   if (!next) { box.innerHTML = '<div class="card"><h2>Next visible pass</h2><p class="hint">No visible passes in the next 10 days. That happens around the solstices and at high latitudes, when the ISS stays in daylight or in shadow.</p></div>'; return; }
@@ -246,7 +246,7 @@ function factorBars(p) {
 function passCard(p) {
   const now = Date.now();
   const v = p.visible, r = p.rating;
-  const ok = qualifies(p, state.settings);
+  const ok = qualifies(p, state.settings, tz());
   const wx = r.wx
     ? `${cloudEmoji(r.wx.effective)} ${Math.round(r.wx.effective)}% effective cloud <span class="badge">low ${Math.round(r.wx.low)}%</span><span class="badge">mid ${Math.round(r.wx.mid)}%</span><span class="badge">high ${Math.round(r.wx.high)}%</span>${r.wx.precip > 10 ? `<span class="badge">rain ${Math.round(r.wx.precip)}%</span>` : ''}`
     : '❔ Beyond the weather forecast range, geometry only';
@@ -359,7 +359,7 @@ const SLIDERS = { minElevation: (v) => `${v}°`, minScore: (v) => `${v}` };
 
 function renderCriteriaPreview() {
   const vis = state.passes.filter((p) => p.visible && p.visible.end.t > Date.now());
-  const good = vis.filter((p) => qualifies(p, state.settings));
+  const good = vis.filter((p) => qualifies(p, state.settings, tz()));
   $('#criteriaPreview').textContent = state.observer
     ? `${good.length} of the next ${vis.length} visible passes match these settings${good[0] ? `. Next: ${describePass(good[0], tz()).when}.` : '.'}`
     : 'Set a location first.';
@@ -372,12 +372,44 @@ async function saveSetting(patch) {
   schedulePushSync();
 }
 
+const fmtHm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+/** Single slider: fill the track up to the knob. */
+function paintRange(el) {
+  el.style.setProperty('--b', (el.value - el.min) / (el.max - el.min));
+}
+
+/** Two knobs on one track; they may pass each other, the window is always the span between them. */
+function setupTimeWindow() {
+  const a = $('#notifyFrom'), b = $('#notifyTo'), box = $('#notifyWindow'), out = $('#notifyWindowOut');
+  a.value = state.settings.notifyFrom;
+  b.value = state.settings.notifyTo;
+  const read = () => [Math.min(+a.value, +b.value), Math.max(+a.value, +b.value)];
+  const paint = () => {
+    const [from, to] = read();
+    box.style.setProperty('--a', from / 1440);
+    box.style.setProperty('--b', to / 1440);
+    out.textContent = from === 0 && to === 1440 ? 'any time' : `${fmtHm(from)} – ${fmtHm(to)}`;
+    return [from, to];
+  };
+  for (const el of [a, b]) {
+    el.addEventListener('input', () => {
+      const [from, to] = paint();
+      Object.assign(state.settings, { notifyFrom: from, notifyTo: to });
+      renderCriteriaPreview();
+    });
+    el.addEventListener('change', () => { const [from, to] = read(); saveSetting({ notifyFrom: from, notifyTo: to }); });
+  }
+  paint();
+}
+
 function setupAlertsView() {
   const s = state.settings;
+  setupTimeWindow();
   for (const [id, fmt] of Object.entries(SLIDERS)) {
     const el = $('#' + id), out = $(`#${id}Out`);
-    el.value = s[id]; out.textContent = fmt(s[id]);
-    el.addEventListener('input', () => { out.textContent = fmt(el.value); state.settings[id] = +el.value; renderCriteriaPreview(); });
+    el.value = s[id]; out.textContent = fmt(s[id]); paintRange(el);
+    el.addEventListener('input', () => { out.textContent = fmt(el.value); paintRange(el); state.settings[id] = +el.value; renderCriteriaPreview(); });
     el.addEventListener('change', () => saveSetting({ [id]: +el.value }));
   }
   for (const id of ['leadMinutes', 'headsUpHours', 'horizonHours']) {

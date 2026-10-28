@@ -31,6 +31,8 @@ export const del = (key) => tx('readwrite', (s) => s.delete(key));
 export const DEFAULT_SETTINGS = {
   minElevation: 25, // degrees
   minScore: 30,
+  notifyFrom: 360, // only passes appearing between these times of day (minutes, location's time zone)
+  notifyTo: 1320,
   leadMinutes: 10,
   headsUpHours: 0, // extra notification this many hours before a good pass (0 = off)
   horizonHours: 48, // how far ahead alerts are booked on the relay
