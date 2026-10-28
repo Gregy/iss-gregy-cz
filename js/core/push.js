@@ -4,13 +4,12 @@
 // IndexedDB). The relay only stores and forwards the ready-made requests.
 import * as store from './store.js';
 import { prepareMessage, b64u } from './webpush.js';
+import { PUSH_SERVER } from '../config.js';
 
 const TOKEN_LIFETIME = 3600; // s past the alert time; covers the relay's 10 min retry window
 
-async function call(server, method, path, body) {
-  const base = (server || '').replace(/\/+$/, '');
-  if (!base) throw new Error('no push relay configured');
-  const res = await fetch(base + path, {
+async function call(method, path, body) {
+  const res = await fetch(PUSH_SERVER + path, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -73,27 +72,27 @@ export async function prepareAlerts(sub, alerts, baseUrl) {
 }
 
 /** Replace every future alert for this subscription. */
-export const uploadSchedule = (settings, sub, prepared) =>
-  call(settings.pushServer, 'PUT', '/api/schedule', { ...identity(sub.toJSON()), alerts: prepared });
+export const uploadSchedule = (sub, prepared) =>
+  call('PUT', '/api/schedule', { ...identity(sub.toJSON()), alerts: prepared });
 
-export async function sendTest(settings, sub, baseUrl) {
+export async function sendTest(sub, baseUrl) {
   const json = sub.toJSON();
   const payload = JSON.stringify({ title: '🛰️ Test: ISS pass alert', body: 'Push notifications through your relay work.', tag: 'test', url: baseUrl, kind: 'info' });
   const message = await prepareMessage(json, payload, await deviceKey(), { exp: Math.floor(Date.now() / 1000) + TOKEN_LIFETIME, subject: subject(baseUrl) });
-  return call(settings.pushServer, 'POST', '/api/send', { ...identity(json), message });
+  return call('POST', '/api/send', { ...identity(json), message });
 }
 
 /**
- * Remove a subscription's bookings from a relay. If the relay can't be reached
- * the request is queued and retried on the next sync, so a relay never keeps
- * sending for a subscription the app has let go of.
+ * Remove a subscription's bookings from the relay. If the relay can't be
+ * reached the request is queued and retried on the next sync, so the relay
+ * never keeps sending for a subscription the app has let go of.
  */
-export async function forget(server, subJson) {
+export async function forget(subJson) {
   try {
-    await call(server, 'DELETE', '/api/schedule', identity(subJson));
+    await call('DELETE', '/api/schedule', identity(subJson));
   } catch (e) {
     const pending = (await store.get('pendingForget')) || [];
-    pending.push({ server, sub: { endpoint: subJson.endpoint, keys: { auth: subJson.keys.auth } }, t: Date.now() });
+    pending.push({ sub: { endpoint: subJson.endpoint, keys: { auth: subJson.keys.auth } }, t: Date.now() });
     await store.set('pendingForget', pending.slice(-20));
     throw e;
   }
@@ -104,15 +103,15 @@ export async function retryPendingForgets() {
   if (!pending.length) return;
   const left = [];
   for (const p of pending) {
-    try { await call(p.server, 'DELETE', '/api/schedule', identity(p.sub)); } catch { if (Date.now() - p.t < 30 * 86400e3) left.push(p); }
+    try { await call('DELETE', '/api/schedule', identity(p.sub)); } catch { if (Date.now() - p.t < 30 * 86400e3) left.push(p); }
   }
   await store.set('pendingForget', left);
 }
 
 /** Turn push off: forget on the relay (queued if offline) and drop the browser subscription. */
-export async function unsubscribe(reg, settings) {
+export async function unsubscribe(reg) {
   const sub = await reg.pushManager.getSubscription();
   if (!sub) return;
-  await forget(settings.pushServer, sub.toJSON()).catch((e) => console.warn('relay forget queued', e));
+  await forget(sub.toJSON()).catch((e) => console.warn('relay forget queued', e));
   await sub.unsubscribe();
 }

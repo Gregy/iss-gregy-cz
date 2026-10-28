@@ -8,6 +8,7 @@ import { fetchWeather, scorePass, passWeather, clearSkyFactor } from './weather.
 import { loadTle } from './tle.js';
 import { prepareAlerts, uploadSchedule, retryPendingForgets, subscribe } from './push.js';
 import * as store from './store.js';
+import { PUSH_SERVER } from '../config.js';
 
 const WEATHER_MAX_AGE = 45 * 60e3;
 const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
@@ -160,7 +161,6 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
   await retryPendingForgets().catch(() => {});
   if (!settings.pushEnabled) return { skipped: 'push off' };
   if (!loc) return skip('no location');
-  if (!settings.pushServer) return skip('no relay configured');
   let sub = await registration.pushManager.getSubscription();
   if (!sub) return skip('not subscribed');
 
@@ -170,22 +170,22 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
     if (!weather) throw new Error('no weather forecast available, previous alerts kept');
     const alerts = buildSchedule(passes, settings, loc, baseUrl, now);
     const good = passes.filter((p) => qualifies(p, settings)).length;
-    const digest = settings.pushServer + sub.endpoint + JSON.stringify(alerts);
+    const digest = PUSH_SERVER + sub.endpoint + JSON.stringify(alerts);
     const last = await store.get('push');
     if (!force && last?.digest === digest && now - last.t < RESYNC_UNCHANGED) {
       await store.set('lastCheck', { t: now, source, good, booked: last.booked, next: last.next, unchanged: true });
       return { good, booked: last.booked, next: last.next, unchanged: true };
     }
-    let r = await uploadSchedule(settings, sub, await prepareAlerts(sub, alerts, baseUrl));
+    let r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
     if (r.invalid) {
       // the push service rejected this device's signature (e.g. the key was lost
       // while the subscription survived): start over with a fresh subscription
       await sub.unsubscribe();
       sub = await subscribe(registration);
-      r = await uploadSchedule(settings, sub, await prepareAlerts(sub, alerts, baseUrl));
+      r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
       await store.log(source, 'push service rejected the old subscription; resubscribed');
     }
-    await store.set('push', { t: now, digest: settings.pushServer + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next });
+    await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next });
     await store.set('lastCheck', { t: now, source, good, booked: r.booked, next: r.next });
     await store.log(source, `${good} good pass(es); ${r.booked} alert(s) booked${r.next ? ', next ' + new Date(r.next).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''}`);
     return { good, booked: r.booked, next: r.next };

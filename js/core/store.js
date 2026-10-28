@@ -1,6 +1,5 @@
 // Minimal IndexedDB key-value store, usable from both page and service worker
 // (localStorage is not available in service workers).
-import { PUSH_SERVER } from '../config.js';
 
 const DB = 'iss-pwa';
 const STORE = 'kv';
@@ -36,13 +35,11 @@ export const DEFAULT_SETTINGS = {
   headsUpHours: 0, // extra notification this many hours before a good pass (0 = off)
   horizonHours: 48, // how far ahead alerts are booked on the relay
   pushEnabled: false,
-  pushServer: PUSH_SERVER,
 };
 
 export async function getSettings() {
-  const s = { ...DEFAULT_SETTINGS, ...((await get('settings')) || {}) };
-  if (!s.pushServer) s.pushServer = PUSH_SERVER; // a relay deployed later still applies
-  return s;
+  const { pushServer, ...saved } = (await get('settings')) || {}; // pushServer: no longer a setting
+  return { ...DEFAULT_SETTINGS, ...saved };
 }
 
 /** Stores only explicitly changed values, so new defaults reach existing installs. */

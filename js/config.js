@@ -1,9 +1,7 @@
-// URL of the push relay (the Cloudflare Worker in /worker). A PUSH_SERVER
-// repository variable overrides it in the GitHub Pages build; users can also
-// change it in the app under Alerts → Push notifications → Relay.
+// URL of the push relay (the Cloudflare Worker in /worker).
 export const PUSH_SERVER = 'https://push.iss.gregy.cz';
 
-export const APP_VERSION = '1.4.8';
+export const APP_VERSION = '1.4.9';
 
 // Shown on the About tab once set (leave empty to hide).
 export const GITHUB_URL = '';

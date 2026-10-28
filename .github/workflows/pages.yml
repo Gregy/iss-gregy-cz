@@ -39,14 +39,6 @@ jobs:
             echo "::warning::TLE refresh failed, deploying the committed copy"
           fi
 
-      - name: Point the app at the push relay
-        if: vars.PUSH_SERVER != ''
-        env:
-          PUSH_SERVER: ${{ vars.PUSH_SERVER }}
-        run: |
-          sed -i "s#^export const PUSH_SERVER = '.*';#export const PUSH_SERVER = '${PUSH_SERVER%/}';#" js/config.js
-          cat js/config.js
-
       - name: Unit tests
         run: node --test 'test/unit/*.test.mjs'
 

@@ -2,7 +2,7 @@ import { satState, sunAltAz, compass, makeObserver } from './core/astro.js';
 import { VIS_MAX_SUN, VIS_MIN_EL } from './core/passes.js';
 import { scoreLabel, cloudEmoji } from './core/weather.js';
 import { computeForecast, qualifies, syncPush, fmtTime, fmtDay, describePass } from './core/alerts.js';
-import { subscribe, unsubscribe, sendTest, forget } from './core/push.js';
+import { subscribe, unsubscribe, sendTest } from './core/push.js';
 import { loadTle } from './core/tle.js';
 import * as store from './core/store.js';
 import { APP_VERSION, GITHUB_URL, SPONSOR_URL } from './config.js';
@@ -337,12 +337,6 @@ function renderTleInfo() {
 
 const getSubscription = async () => (state.reg ? state.reg.pushManager.getSubscription() : null);
 
-function validRelayUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' || (u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname));
-  } catch { return false; }
-}
 const hostOf = (url) => { try { return new URL(url).host; } catch { return url; } };
 
 async function runPushSync(source, force = false) {
@@ -393,24 +387,6 @@ function setupAlertsView() {
   // enabling/disabling must not interleave with a sync uploading for the same subscription
   const withSyncLock = (fn) => (navigator.locks ? navigator.locks.request('iss-push-sync', fn) : fn());
 
-  $('#pushServer').value = s.pushServer;
-  $('#pushServer').addEventListener('change', async (e) => {
-    const url = e.target.value.trim().replace(/\/+$/, '');
-    if (url && !validRelayUrl(url)) {
-      e.target.value = state.settings.pushServer;
-      return toast('Relay URL must start with https:// (http:// only for localhost)', 4000);
-    }
-    const old = state.settings.pushServer;
-    if (url === old) return;
-    // bookings live on the old relay: remove them there (queued if it's unreachable)
-    const sub = await getSubscription();
-    if (sub && old) await withSyncLock(() => forget(old, sub.toJSON())).catch(() => {});
-    await store.del('push');
-    await saveSetting({ pushServer: url });
-    if (state.settings.pushEnabled) await runPushSync('relay-change', true);
-    renderAlertStatus();
-  });
-
   $('#pushEnabled').checked = s.pushEnabled;
   $('#pushEnabled').addEventListener('change', async (e) => {
     const box = e.target;
@@ -418,7 +394,6 @@ function setupAlertsView() {
     try {
       if (box.checked) {
         if (!state.reg || !('PushManager' in window)) throw new Error('Push is not supported in this browser');
-        if (!state.settings.pushServer) throw new Error('Set the relay URL first (Relay section below)');
         if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notification permission denied');
         await withSyncLock(() => subscribe(state.reg));
         await saveSetting({ pushEnabled: true });
@@ -428,14 +403,14 @@ function setupAlertsView() {
         toast(r.booked ? `${r.booked} alert(s) booked` : 'Subscribed. No passes match your criteria yet.');
       } else {
         await saveSetting({ pushEnabled: false });
-        await withSyncLock(() => unsubscribe(state.reg, state.settings));
+        await withSyncLock(() => unsubscribe(state.reg));
         await state.reg?.periodicSync?.unregister('iss-check').catch(() => {});
         await store.del('push');
       }
     } catch (err) {
       box.checked = false;
       await saveSetting({ pushEnabled: false });
-      if (state.reg) await withSyncLock(() => unsubscribe(state.reg, state.settings)).catch(() => {});
+      if (state.reg) await withSyncLock(() => unsubscribe(state.reg)).catch(() => {});
       toast(err.message, 4000);
     } finally {
       box.disabled = false;
@@ -445,7 +420,7 @@ function setupAlertsView() {
   $('#pushTest').addEventListener('click', async () => {
     const sub = await getSubscription();
     if (!state.settings.pushEnabled || !sub) return toast('Turn on push notifications first');
-    try { await sendTest(state.settings, sub, APP_URL); toast('Test sent. It should arrive in a few seconds.'); } catch (err) { toast(`Test failed: ${err.message}`, 4000); }
+    try { await sendTest(sub, APP_URL); toast('Test sent. It should arrive in a few seconds.'); } catch (err) { toast(`Test failed: ${err.message}`, 4000); }
   });
   $('#pushSync').addEventListener('click', async () => {
     const r = await runPushSync('manual', true);
@@ -498,7 +473,6 @@ async function renderAlertStatus() {
         : li('ok', `Synced ${when(last.t)} (${esc(last.source)}): ${last.booked ?? 0} alert(s) booked${last.next ? `, next ${when(last.next)}` : ''}`);
   $('#pushStatus').innerHTML = !s.pushEnabled
     ? [
-      !s.pushServer ? li('warn', 'No relay configured. Deploy the worker in <code>/worker</code> and set its URL under Relay.') : li('ok', `Relay: ${esc(hostOf(s.pushServer))}`),
       perm === 'denied' ? li('bad', 'Notifications are blocked for this site in browser settings') : '',
     ].join('')
     : [

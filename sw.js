@@ -126,7 +126,7 @@ self.addEventListener('pushsubscriptionchange', (e) => {
     const settings = await store.getSettings();
     if (!settings.pushEnabled) return;
     try {
-      if (e.oldSubscription) await forget(settings.pushServer, e.oldSubscription.toJSON()).catch(() => {});
+      if (e.oldSubscription) await forget(e.oldSubscription.toJSON()).catch(() => {});
       if (!e.newSubscription) await subscribe(self.registration);
       await backgroundSync('subscription-change', { force: true });
     } catch (err) {

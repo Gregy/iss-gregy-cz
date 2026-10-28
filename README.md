@@ -85,12 +85,12 @@ To deploy automatically on push instead, add repo secrets `CLOUDFLARE_API_TOKEN`
 
 ### 2. App (GitHub Pages)
 1. Push this repo to GitHub (branch `main`).
-2. The relay URL is `PUSH_SERVER` in `js/config.js`. To override it per deployment, add a repository variable `PUSH_SERVER` under **Settings → Secrets and variables → Actions → Variables**.
+2. The relay URL is `PUSH_SERVER` in `js/config.js` (fixed; users can't change it).
 3. **Settings → Pages → Source: GitHub Actions.**
-4. The `Deploy to GitHub Pages` workflow publishes on every push and every 6 h. Each run refreshes `data/iss.tle` and writes `PUSH_SERVER` into `js/config.js`.
+4. The `Deploy to GitHub Pages` workflow publishes on every push and every 6 h. Each run runs the unit tests and refreshes `data/iss.tle`.
    GitHub disables scheduled workflows after 60 days without repo activity. The app still works without them, because it fetches CelesTrak directly.
 
-All paths are relative, so the app works under `https://<user>.github.io/<repo>/`. The About tab's GitHub and sponsor buttons appear once `GITHUB_URL` / `SPONSOR_URL` are set in `js/config.js`. The relay URL can also be set in the app under Alerts → Push notifications → Relay.
+All paths are relative, so the app works under `https://<user>.github.io/<repo>/`. The About tab's GitHub and sponsor buttons appear once `GITHUB_URL` / `SPONSOR_URL` are set in `js/config.js`.
 
 ### Install on Android
 Open the site in Chrome, then **⋮ → Add to Home screen / Install app**, or use the *Install app* button in the Alerts tab. In Alerts, set your criteria, turn on **Push notifications**, and tap **Send test**. Installing also enables background forecast refresh.
