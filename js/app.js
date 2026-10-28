@@ -486,7 +486,7 @@ async function renderAlertStatus() {
       lastLine,
       ps === 'registered' ? li('ok', 'Background forecast refresh active')
         // e.g. Firefox and Safari: no Periodic Background Sync at all, installed or not
-        : ps === 'unsupported' ? li('info', `This browser has no scheduled background refresh. Opening the app books alerts for the next ${s.horizonHours} h ("Book alerts up to"), and every alert that arrives books the next ${s.horizonHours} h again. If no alert arrives for longer than that and you don't open the app, nothing new gets booked. For hands-off alerts, install the app from Chrome or Edge.`)
+        : ps === 'unsupported' ? li('warn', `This browser has no scheduled background refresh. Opening the app books alerts for the next ${s.horizonHours} h ("Book alerts up to"), and every alert that arrives books the next ${s.horizonHours} h again. If no alert arrives for longer than that and you don't open the app, nothing new gets booked. For hands-off alerts, install the app from Chrome or Edge.`)
           : li('warn', 'Background refresh inactive. Install the app to the home screen for fresher forecasts.'),
     ].join('');
   $('#appStatus').innerHTML = [
