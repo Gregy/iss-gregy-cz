@@ -457,7 +457,7 @@ async function registerPeriodicSync() {
 }
 
 async function renderAlertStatus() {
-  const li = (cls, text) => `<li><span class="${cls}">${cls === 'ok' ? '✔' : cls === 'warn' ? '!' : '✖'}</span><span>${text}</span></li>`;
+  const li = (cls, text) => `<li><span class="${cls}">${{ ok: '✔', warn: '!', info: 'ℹ' }[cls] ?? '✖'}</span><span>${text}</span></li>`;
   const standalone = matchMedia('(display-mode: standalone)').matches;
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   let ps = 'unsupported';
@@ -485,10 +485,14 @@ async function renderAlertStatus() {
       sub ? li('ok', `Subscribed via ${esc(hostOf(sub.endpoint))}`) : li('bad', 'No push subscription. Toggle off and on again.'),
       lastLine,
       ps === 'registered' ? li('ok', 'Background forecast refresh active')
-        : li('warn', ps === 'unsupported' ? 'No background refresh in this browser. Alerts update when you open the app.' : 'Background refresh inactive. Install the app to the home screen for fresher forecasts.'),
+        // e.g. Firefox and Safari: no Periodic Background Sync at all, installed or not
+        : ps === 'unsupported' ? li('info', 'This browser has no scheduled background refresh. The forecast is re-checked when you open the app and whenever an alert arrives.')
+          : li('warn', 'Background refresh inactive. Install the app to the home screen for fresher forecasts.'),
     ].join('');
   $('#appStatus').innerHTML = [
-    standalone ? li('ok', 'Running as installed app') : li('warn', 'Running in the browser. Install it to let the forecast refresh in the background.'),
+    standalone ? li('ok', 'Running as installed app')
+      : ps === 'unsupported' ? li('info', 'Running in the browser') // installing wouldn't add background refresh here
+        : li('warn', 'Running in the browser. Install it to let the forecast refresh in the background.'),
     state.reg ? li('ok', 'Offline support active') : li('warn', 'Service worker not active'),
     state.tle ? li(Date.now() - state.tle.epoch < 3 * 86400e3 ? 'ok' : 'warn', `Orbit data epoch ${new Date(state.tle.epoch).toLocaleString()} (${state.tle.source})`) : '',
   ].join('');
