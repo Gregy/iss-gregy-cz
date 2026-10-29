@@ -208,6 +208,7 @@ export class IssMap {
     }).setView([20, 0], 2);
     L.control.zoom({ position: 'topright' }).addTo(this.map);
     this.fitMinZoom();
+    this.map.setZoom(this.map.getMinZoom(), { animate: false });
     this.map.on('resize', () => this.fitMinZoom());
 
     // NASA GIBS: public domain, no API key, CORS-enabled
@@ -301,6 +302,14 @@ export class IssMap {
     const z = Math.max(0, Math.ceil(Math.log2(Math.max(x, y) / 256)));
     this.map.setMinZoom(z);
     if (this.map.getZoom() < z) this.map.setZoom(z);
+  }
+
+  /** The whole world in view (widest zoom), centred on the ISS. Waits until the map has a size. */
+  focusIss() {
+    if (!this.iss) return;
+    if (!this.map.getSize().x) { this.map.once('resize', () => this.focusIss()); return; }
+    this.fitMinZoom();
+    this.map.setView([this.iss.lat, this.iss.lon], this.map.getMinZoom(), { animate: false });
   }
 
   updateIss(state) {

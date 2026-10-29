@@ -664,7 +664,6 @@ async function boot() {
     $('#locName').textContent = state.loc.name;
     state.observer = makeObserver(state.loc.lat, state.loc.lon, state.loc.height || 0);
     state.map.setObserver(state.loc);
-    state.map.focusObserver(state.loc);
   }
   route();
 
@@ -673,6 +672,7 @@ async function boot() {
     renderTleInfo();
     state.map.drawTrack(state.tle.satrec);
     tickLive();
+    state.map.focusIss(); // a fresh start shows the whole world around the ISS
   } catch (e) { toast(e.message); }
 
   setInterval(tickLive, 1000);
