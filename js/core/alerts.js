@@ -22,7 +22,7 @@ const MAX_ALERTS = 60; // the relay's limit per subscription
 export const BOOK_DAYS = 14; // "look up now" alerts for every matching pass this far ahead
 export const WEATHER_HOURS = 48; // beyond this the cloud forecast is too uncertain to drop a pass for
 export const LOOKAHEAD_DAYS = 120; // how far to look for the next passes after a long stretch without any
-export const SEASON_PASSES = 5; // season notices before this many passes, in case the phone misses some
+export const SEASON_PASSES = 5; // at least this many booked chances to re-book, in case the phone misses some
 const SEASON_LEAD = 3 * 3600e3; // a season notice comes this long before its pass
 const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
 
@@ -128,10 +128,12 @@ const seasonNotice = (baseUrl, at, id, body) => ({
 
 /**
  * Notifications to book: a "look up now" alert for every qualifying pass of the
- * next BOOK_DAYS. If there is none, season notices before the next
- * SEASON_PASSES qualifying passes (orbit predictions that far out are only
- * good to the day, which is all a notice needs); if there are none at all
- * within the passes given, one notice at their end, to look again.
+ * next BOOK_DAYS. With fewer than SEASON_PASSES of them, season notices before
+ * the next qualifying passes after that make up the difference (orbit
+ * predictions that far out are only good to the day, which is all a notice
+ * needs). Every arrival re-books, so a notice only fires if all earlier
+ * notifications were missed or there were none. If no pass after BOOK_DAYS
+ * qualifies within the passes given, one notice at their end, to look again.
  */
 export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) {
   const tz = loc.tz;
@@ -150,9 +152,9 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
       title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}`, body: `${d.path}\n${d.stats}`, check,
     });
   }
-  if (out.length) return out.slice(0, MAX_ALERTS);
+  if (out.length >= SEASON_PASSES) return out.slice(0, MAX_ALERTS);
 
-  const later = good.filter((p) => p.visible.start.t > now + BOOK_DAYS * DAY).slice(0, SEASON_PASSES);
+  const later = good.filter((p) => p.visible.start.t > now + BOOK_DAYS * DAY).slice(0, SEASON_PASSES - out.length);
   for (const p of later) {
     const at = daytime(p.visible.start.t - SEASON_LEAD, tz);
     if (at > now) out.push(seasonNotice(baseUrl, at, `${p.id}-season`, `Visible passes are back, the first ${dayPhrase(p.visible.start.t, tz, at)} around ${fmtTime(p.visible.start.t, tz)}. Open the app for the forecast.`));
@@ -240,7 +242,7 @@ const plural = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
 
 /** One line about what was booked, for the log and the status. */
 export function scheduleSummary(s) {
-  if (s.booked) return `${plural(s.good, 'notification-worthy pass', 'notification-worthy passes')} in the next ${BOOK_DAYS} days, ${plural(s.booked, 'notification')} scheduled, next ${when(s.next)}`;
+  if (s.booked) return `${plural(s.good, 'notification-worthy pass', 'notification-worthy passes')} in the next ${BOOK_DAYS} days, ${plural(s.booked, 'notification')} scheduled, next ${when(s.next)}${s.season ? `; in case they're missed, "season is back" notices from ${when(s.season)}` : ''}`;
   if (s.lookAgain) return `no passes match your settings in the next ${LOOKAHEAD_DAYS} days; the app looks again ${when(s.season)}`;
   if (s.season) return `no passes in the next ${BOOK_DAYS} days; a "season is back" notice comes ${when(s.season)}`;
   return 'no passes match your settings';
@@ -272,8 +274,8 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
     // without any forecast every pass would look clear; keep the previous bookings instead
     if (!weather) throw new Error('no weather forecast available, previous alerts kept');
     let alerts = buildSchedule(passes, settings, loc, baseUrl, now);
-    if (!alerts.some((a) => a.kind === 'lead')) {
-      // a long stretch without passes: look months ahead for where they resume
+    if (alerts.filter((a) => a.kind === 'lead').length < SEASON_PASSES) {
+      // few or no passes soon: look months ahead for where they resume
       const far = predictPasses(tle.satrec, observer, now, LOOKAHEAD_DAYS * 24);
       for (const p of far) p.rating = scorePass(p, weather);
       alerts = buildSchedule(far, settings, loc, baseUrl, now);
@@ -282,7 +284,7 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
     const leads = alerts.filter((a) => a.kind === 'lead');
     const state = {
       good, booked: leads.length, next: leads[0]?.at ?? null, until: leads.at(-1)?.at ?? null,
-      season: leads.length ? null : alerts[0]?.at ?? null, // a season notice, or the look-again notice
+      season: alerts.find((a) => a.kind === 'season')?.at ?? null, // the first season notice, or the look-again notice
       lookAgain: alerts.some((a) => a.id === 'season-check'),
     };
     const digest = PUSH_SERVER + sub.endpoint + JSON.stringify(alerts);

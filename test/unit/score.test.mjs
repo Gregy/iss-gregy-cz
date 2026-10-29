@@ -68,10 +68,10 @@ const LOC = { tz: 'Europe/Prague' };
 const passesOn = (days, wx = null) => days.map((d) => { const p = pass({ start: T0 + d * DAY }); p.id = `d${d}`; p.rating = scorePass(p, wx); return p; });
 
 test('buildSchedule: a "look up now" alert for every matching pass of the next 14 days', () => {
-  const ps = passesOn([1, 5, 13, 16]);
+  const ps = passesOn([1, 3, 5, 9, 13, 16]);
   const alerts = buildSchedule(ps, settings, LOC, 'https://example.org/', T0);
   assert.equal(BOOK_DAYS, 14);
-  assert.deepEqual(alerts.map((a) => a.id), ['d1-lead', 'd5-lead', 'd13-lead'], 'day 16 is beyond the window');
+  assert.deepEqual(alerts.map((a) => a.id), ['d1-lead', 'd3-lead', 'd5-lead', 'd9-lead', 'd13-lead'], 'day 16 is beyond the window; five alerts need no season notices');
   assert.ok(alerts.every((a) => a.kind === 'lead'));
   assert.equal(alerts[0].at, ps[0].visible.start.t - 10 * 60e3);
   assert.equal(alerts[0].url, 'https://example.org/#pass=d1');
@@ -96,8 +96,14 @@ test('buildSchedule: after a long stretch without passes, season notices before 
   assert.deepEqual(alerts.map((a) => a.id), ['d20-season', 'd21-season', 'd23-season', 'd24-season', 'd26-season']);
   assert.equal(alerts[0].at, ps[0].visible.start.t - 3 * 3600e3, '15:00, three hours before the 18:00 pass');
   assert.ok(alerts[0].body.startsWith(`Visible passes are back, the first tonight around ${fmtTime(ps[0].visible.start.t, LOC.tz)}.`), alerts[0].body);
-  // a pass within 14 days means ordinary alerts, no season notices
-  assert.ok(buildSchedule(passesOn([10, 20, 21]), settings, LOC, 'https://example.org/', T0).every((a) => a.kind === 'lead'));
+});
+
+test('buildSchedule: fewer than five alerts in 14 days are topped up with season notices', () => {
+  const alerts = buildSchedule(passesOn([10, 20, 21, 25, 30, 31]), settings, LOC, 'https://example.org/', T0);
+  assert.deepEqual(alerts.map((a) => a.id), ['d10-lead', 'd20-season', 'd21-season', 'd25-season', 'd30-season']);
+  // and if nothing qualifies after the 14 days, a notice to look again
+  const alone = buildSchedule([...passesOn([3]), ...passesOn([60, 100]).map((p) => ({ ...p, rating: { ...p.rating, score: 0, geo: 0 } }))], settings, LOC, 'https://example.org/', T0);
+  assert.deepEqual(alone.map((a) => a.id), ['d3-lead', 'season-check']);
 });
 
 test('buildSchedule: nothing matching in the whole look-ahead: one notice near its end to look again', () => {
