@@ -1,9 +1,9 @@
-// Service worker (ES module): offline app shell, map tile cache, push
-// notifications from the relay, and a background re-sync of the alert schedule
-// (fresh forecast) driven by Periodic Background Sync.
-import { syncPush, freshenLeadAlert } from './js/core/alerts.js';
+// Service worker (ES module): offline app shell, map tile cache, and push
+// notifications from the relay. Each arriving notification also re-books the
+// alert schedule with fresh orbit data and forecast: there is no other
+// background work (see README, "Why there is no background refresh").
+import { syncPush, freshenAlert } from './js/core/alerts.js';
 import { forget, subscribe } from './js/core/push.js';
-import { recordNotificationClick, recordNudgeShown } from './js/core/engagement.js';
 import * as store from './js/core/store.js';
 import { APP_VERSION } from './js/config.js';
 
@@ -21,7 +21,7 @@ const SHELL_FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/ui/map.js', 'js/ui/skychart.js',
   'js/core/astro.js', 'js/core/passes.js', 'js/core/weather.js', 'js/core/store.js',
-  'js/core/tle.js', 'js/core/alerts.js', 'js/core/push.js', 'js/core/webpush.js', 'js/core/engagement.js', 'js/config.js',
+  'js/core/tle.js', 'js/core/alerts.js', 'js/core/push.js', 'js/core/webpush.js', 'js/config.js',
   'vendor/satellite.esm.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/badge-96.png', 'icons/icon.svg',
 ];
@@ -99,10 +99,8 @@ self.addEventListener('push', (e) => {
   let d;
   try { d = e.data.json(); } catch { d = { title: 'ISS Pass Tracker', body: e.data?.text() || '' }; }
   e.waitUntil((async () => {
-    // "look up now": re-check the clouds first (a few seconds at most)
-    d = await freshenLeadAlert(d).catch(() => d);
-    // a reminder nobody taps stops further ones (see engagement.js)
-    if (d.kind === 'nudge') await recordNudgeShown().catch(() => {});
+    // "look up now": re-check the clouds; "season is back": count the coming week's passes (a few seconds at most)
+    d = await freshenAlert(d).catch(() => d);
     await self.registration.showNotification(d.title || 'ISS Pass Tracker', {
       body: d.body,
       tag: d.tag,
@@ -112,14 +110,10 @@ self.addEventListener('push', (e) => {
       badge: 'icons/badge-96.png',
       data: { url: d.url && sameOrigin(d.url) ? d.url : self.registration.scope },
     });
-    // Any alert is also a chance to re-book with the latest forecast, e.g. a
-    // heads-up cancels the later "look up now" if the pass has clouded over.
+    // the only chance to re-book while the app is closed: fresh orbit data and
+    // forecast for every later alert, and the next ones after a gap
     await backgroundSync('push', { weatherMaxAge: 10 * 60e3 }).catch(() => {});
   })());
-});
-
-self.addEventListener('periodicsync', (e) => {
-  if (e.tag === 'iss-check') e.waitUntil(backgroundSync('periodic-sync'));
 });
 
 // The browser rotated or expired the subscription: subscribe again (same
@@ -142,7 +136,6 @@ self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   const url = e.notification.data?.url || self.registration.scope;
   e.waitUntil((async () => {
-    // open first: the browser allows a window only shortly after the click
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const open = all.find((c) => c.url.startsWith(self.registration.scope));
     if (open) {
@@ -151,8 +144,5 @@ self.addEventListener('notificationclick', (e) => {
     } else {
       await self.clients.openWindow(url);
     }
-    // Chrome counts the click as engagement; so does the estimate, which moves the next reminder out
-    await recordNotificationClick().catch(() => {});
-    if (e.notification.tag === 'nudge') await backgroundSync('nudge').catch(() => {});
   })());
 });

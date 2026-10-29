@@ -1,9 +1,8 @@
 import { satState, sunAltAz, compass, makeObserver } from './core/astro.js';
 import { VIS_MAX_SUN, VIS_MIN_EL } from './core/passes.js';
 import { scoreLabel, cloudEmoji } from './core/weather.js';
-import { computeForecast, qualifies, syncPush, fmtTime, fmtDay, describePass } from './core/alerts.js';
+import { computeForecast, qualifies, syncPush, scheduleSummary, fmtTime, fmtDay, describePass, BOOK_DAYS } from './core/alerts.js';
 import { subscribe, unsubscribe, sendTest } from './core/push.js';
-import { recordInput, recordLaunch, trackInput, plannedNudge, total as engagementScore, THRESHOLD, P as ENGAGEMENT } from './core/engagement.js';
 import { loadTle } from './core/tle.js';
 import * as store from './core/store.js';
 import { APP_VERSION, GITHUB_URL, SPONSOR_URL } from './config.js';
@@ -417,10 +416,8 @@ function setupAlertsView() {
     el.addEventListener('input', () => { out.textContent = fmt(el.value); paintRange(el); state.settings[id] = +el.value; renderCriteriaPreview(); });
     el.addEventListener('change', () => saveSetting({ [id]: +el.value }));
   }
-  for (const id of ['leadMinutes', 'headsUpHours', 'horizonHours']) {
-    $('#' + id).value = String(s[id]);
-    $('#' + id).addEventListener('change', (e) => saveSetting({ [id]: +e.target.value }));
-  }
+  $('#leadMinutes').value = String(s.leadMinutes);
+  $('#leadMinutes').addEventListener('change', (e) => saveSetting({ leadMinutes: +e.target.value }));
 
   // enabling/disabling must not interleave with a sync uploading for the same subscription
   const withSyncLock = (fn) => (navigator.locks ? navigator.locks.request('iss-push-sync', fn) : fn());
@@ -432,19 +429,19 @@ function setupAlertsView() {
     try {
       if (box.checked) {
         if (!state.loc) throw new Error('Set your location first: alerts are for passes over your location');
+        // iPhone: push exists only in apps added to the Home Screen
+        if (!('PushManager' in window) && isIOS()) throw new Error('On iPhone, add the app to the Home Screen first (Share → Add to Home Screen), then turn notifications on there');
         if (!state.reg || !('PushManager' in window)) throw new Error('Push is not supported in this browser');
         if ((await Notification.requestPermission()) !== 'granted') throw new Error('Notification permission denied');
         await withSyncLock(() => subscribe(state.reg));
         await saveSetting({ pushEnabled: true });
-        await registerPeriodicSync();
         const r = await runPushSync('enabled', true);
         // name the push service the relay refused, so it can be added
         if (r.error) throw new Error(/push endpoint/.test(r.error) ? `${r.error} (${hostOf((await getSubscription())?.endpoint || '')})` : r.error);
-        toast(r.booked ? `Notifications on: ${plural(r.booked, 'notification')} scheduled` : 'Notifications on. No passes match your settings yet.');
+        toast(`Notifications on: ${scheduleSummary(r)}`, 4000);
       } else {
         await saveSetting({ pushEnabled: false });
         await withSyncLock(() => unsubscribe(state.reg));
-        await state.reg?.periodicSync?.unregister('iss-check').catch(() => {});
         await store.del('push');
       }
     } catch (err) {
@@ -467,12 +464,11 @@ function setupAlertsView() {
     if (r.skipped === 'push off') toast('Turn on push notifications first');
     else if (r.skipped) toast(`Notifications not scheduled: ${skipReason(r.skipped)}`, 4000);
     else if (r.error) toast(`Scheduling notifications failed: ${r.error}`, 4000);
-    else toast(`${plural(r.good, 'notification-worthy pass', 'notification-worthy passes')} · ${plural(r.booked, 'notification')} scheduled`);
+    else toast(scheduleSummary(r), 4000);
   });
 
   $('#refreshTle').addEventListener('click', async () => { toast('Refreshing…'); await refreshForecast({ forceTle: true }); toast(`Orbit data from ${state.tle?.source}`); });
   $('#installBtn').addEventListener('click', promptInstall);
-  $('#pushStatus').addEventListener('click', (e) => { if (e.target.closest('[data-install]')) promptInstall(); });
 }
 
 /** The browser's own install dialog (Chrome/Edge offer it once the app is installable). */
@@ -485,27 +481,11 @@ async function promptInstall() {
   renderAlertStatus();
 }
 
-async function registerPeriodicSync() {
-  const reg = state.reg;
-  if (!reg || !('periodicSync' in reg)) return 'unsupported';
-  try {
-    const p = await navigator.permissions.query({ name: 'periodic-background-sync' });
-    if (p.state !== 'granted') return p.state;
-    await reg.periodicSync.register('iss-check', { minInterval: 6 * 3600e3 });
-    return 'registered';
-  } catch (e) {
-    console.warn('periodic sync', e);
-    return 'error';
-  }
-}
-
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
 /** Who scheduled the notifications, in words (internal source names are stored). */
 const SOURCES = {
   app: 'when you opened the app', enabled: 'when you turned notifications on', manual: 'on request',
-  push: 'when a notification arrived', 'periodic-sync': 'in the background', 'subscription-change': 'after the browser renewed notifications',
-  nudge: 'when you tapped the reminder',
+  push: 'when a notification arrived', 'subscription-change': 'after the browser renewed notifications',
+  'periodic-sync': 'in the background', // older versions; may still be in the log
 };
 const sourceText = (s) => SOURCES[s] || s;
 const SKIPS = {
@@ -515,33 +495,29 @@ const SKIPS = {
 };
 const skipReason = (r) => SKIPS[r] || r;
 
-/** What happens to alert bookings without background refresh (h: the booking window). */
-const withoutRefresh = (h) => `Without it, alerts are booked only when you open the app or an alert arrives, ${h} h ahead each time, with the forecast from that moment. More than ${h} h with neither means no new alerts.`;
-
-// every iOS browser runs on Apple's engine, none has background refresh (iPadOS reports itself as a Mac)
+// iPadOS reports itself as a Mac
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 async function renderAlertStatus() {
   const li = (cls, text) => `<li><span class="${cls}">${{ ok: '✔', warn: '!', info: 'ℹ' }[cls] ?? '✖'}</span><span>${text}</span></li>`;
   const standalone = matchMedia('(display-mode: standalone)').matches;
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-  let ps = 'unsupported';
-  if (state.reg && 'periodicSync' in state.reg) {
-    const tags = await state.reg.periodicSync.getTags().catch(() => []);
-    ps = tags.includes('iss-check') ? 'registered' : (await navigator.permissions.query({ name: 'periodic-background-sync' }).catch(() => ({ state: 'unknown' }))).state;
-    // allowed (e.g. just installed) but not set up yet: set it up now
-    if (ps === 'granted' && state.settings.pushEnabled) ps = await registerPeriodicSync();
-  }
   const last = await store.get('lastCheck');
   const sub = await getSubscription().catch(() => null);
   const s = state.settings;
   const when = (t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const day = (t) => new Date(t).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
   const lastLine = !last ? li('warn', 'Notifications not scheduled yet')
     : last.error ? li('bad', `Scheduling notifications failed ${when(last.t)}: ${esc(last.error)}`)
       : last.skipped ? li('warn', `Notifications not scheduled ${when(last.t)}: ${esc(skipReason(last.skipped))}`)
-        : li('ok', `Notifications scheduled ${when(last.t)} ${esc(sourceText(last.source))}: ${last.booked
-          ? `${plural(last.booked, 'notification')} coming up${last.next ? `, next ${when(last.next)}` : ''}`
-          : 'no passes match your settings yet'}`);
+        : li('ok', `Notifications scheduled ${when(last.t)} ${esc(sourceText(last.source))}: ${esc(scheduleSummary(last))}`);
+  // what keeps the chain going: the last booked alert re-books when it arrives
+  const chainLine = !last || last.error || last.skipped ? ''
+    : last.booked && last.until ? li('info', `Alerts are booked through ${day(last.until)}. Each one that arrives books the next, so they keep coming while this device can receive notifications.`)
+      : last.season ? li('info', last.lookAgain
+        ? 'Nothing to alert you about for months. Consider a lower minimum height or score.'
+        : `No passes in the next ${BOOK_DAYS} days. A "season is back" notice comes a few hours before each of the next passes, and the first one that arrives books the alerts.`)
+        : '';
   // turning on needs a location; turning off always works
   $('#pushEnabled').disabled = !state.loc && !s.pushEnabled;
   $('#pushStatus').innerHTML = !s.pushEnabled
@@ -553,56 +529,18 @@ async function renderAlertStatus() {
       perm === 'granted' ? li('ok', 'Notification permission granted') : li('bad', `Notification permission: ${perm}`),
       sub ? li('ok', `Subscribed via ${esc(hostOf(sub.endpoint))}`) : li('bad', 'No push subscription. Toggle off and on again.'),
       lastLine,
-      ps === 'registered' ? li('ok', `Background forecast refresh active: about once a day. Chrome slows it down and then pauses it for apps that aren't used.${
-        last?.nudge ? ` If the app goes unused, a "still want ISS pass alerts?" reminder comes ${when(last.nudge)}: tap it to keep the refresh going.` : ''}`)
-        // Firefox and Safari: no Periodic Background Sync at all, installed or not
-        : ps === 'unsupported' ? li('warn', `${isIOS() ? 'No background refresh on iPhone.'
-          : 'No background refresh in this browser. For hands-off alerts, use the app installed from Chrome or Edge.'}<br>${withoutRefresh(s.horizonHours)}`)
-          // Chrome/Edge allow it only for installed apps
-          : !standalone ? li('warn', `Background refresh needs the app installed. ${state.installEvt
-            ? '<button type="button" class="btn small" data-install>Install app</button>'
-            : 'Use the browser menu: ⋮ → <b>Install app</b> or <b>Add to Home screen</b>.'}<br>${withoutRefresh(s.horizonHours)}`)
-            : li('warn', `Background refresh is blocked for this app. Allow <b>Background sync</b> in the browser's site settings.<br>${withoutRefresh(s.horizonHours)}`),
+      chainLine,
     ].join('');
   $('#appStatus').innerHTML = [
     standalone ? li('ok', 'Running as installed app')
-      : ps === 'unsupported' ? li('info', 'Running in the browser') // installing wouldn't add background refresh here
-        : li('warn', 'Running in the browser. Install it to let the forecast refresh in the background.'),
+      : isIOS() ? li('warn', 'Running in the browser. On iPhone, notifications need the app on the Home Screen: Share → Add to Home Screen.')
+        : li('info', 'Running in the browser'),
     state.reg ? li('ok', 'Offline support active') : li('warn', 'Service worker not active'),
-    ps !== 'unsupported' ? engagementLine(li, await store.get('engagement')) : '',
     state.tle ? li(Date.now() - state.tle.epoch < 3 * 86400e3 ? 'ok' : 'warn', `Orbit data epoch ${new Date(state.tle.epoch).toLocaleString()} (${state.tle.source})`) : '',
   ].join('');
   const log = (await store.get('log')) || [];
   $('#logList').innerHTML = log.map((e) => `<li>${new Date(e.t).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} ${esc(sourceText(e.source))}: ${esc(e.msg)}</li>`).join('');
   $('#logEmpty').hidden = log.length > 0;
-}
-
-// ---------- engagement ----------
-
-/**
- * Feed Chrome's engagement estimate (engagement.js): a launch from the app
- * icon (start_url carries ?from=icon) and taps in the page. When that moves
- * the booked reminder, book again.
- */
-function setupEngagement() {
-  const params = new URLSearchParams(location.search);
-  if (params.has('from')) {
-    if (params.get('from') === 'icon' && matchMedia('(display-mode: standalone)').matches) recordLaunch().then(rebookNudge);
-    history.replaceState(null, '', location.pathname + location.hash); // a reload isn't another launch
-  }
-  trackInput((now) => recordInput(now).then(rebookNudge).catch((e) => console.warn('engagement', e)));
-}
-
-async function rebookNudge() {
-  if (!state.settings.pushEnabled) return;
-  const booked = (await store.get('push'))?.nudge;
-  if (booked && (await plannedNudge())?.at !== booked) schedulePushSync();
-}
-
-/** Chrome-only status line: the estimate, to compare with chrome://site-engagement. */
-function engagementLine(li, st) {
-  const score = st ? engagementScore(st, Date.now()) : 0;
-  return li(score >= THRESHOLD ? 'ok' : 'warn', `Estimated Chrome engagement score: ${score.toFixed(1)}. Background refresh slows down below ${THRESHOLD} and stops at ${ENGAGEMENT.cleanup}.`);
 }
 
 // ---------- about ----------
@@ -632,7 +570,7 @@ async function boot() {
   });
 
   // one broken panel shouldn't take the live map down with it
-  for (const setup of [setupLocationDialog, setupAlertsView, renderAbout, setupEngagement]) {
+  for (const setup of [setupLocationDialog, setupAlertsView, renderAbout]) {
     try { setup(); } catch (e) { console.error(e); }
   }
   $('#passList').addEventListener('click', (e) => { const b = e.target.closest('[data-share]'); if (b) sharePass(b.dataset.share); });
@@ -648,14 +586,14 @@ async function boot() {
       navigator.serviceWorker.addEventListener('message', (e) => {
         if (e.data?.type === 'open') location.href = e.data.url;
       });
-      if (state.settings.pushEnabled) registerPeriodicSync();
+      // older versions registered Periodic Background Sync; the app no longer uses it
+      state.reg.periodicSync?.unregister('iss-check').catch(() => {});
     } catch (e) { console.warn('SW registration failed', e); }
   }
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); state.installEvt = e; $('#installBtn').hidden = false; renderAlertStatus(); });
-  window.addEventListener('appinstalled', async () => {
+  window.addEventListener('appinstalled', () => {
     state.installEvt = null;
     $('#installBtn').hidden = true;
-    if (state.settings.pushEnabled) await registerPeriodicSync();
     renderAlertStatus();
   });
 

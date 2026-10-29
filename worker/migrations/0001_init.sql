@@ -3,7 +3,7 @@ CREATE TABLE subscriptions (
   id TEXT PRIMARY KEY,
   endpoint TEXT NOT NULL,
   owner TEXT NOT NULL,        -- sha256 of the subscription's auth secret; requests must present the secret
-  updated INTEGER NOT NULL,   -- ms; subscriptions not refreshed for 30 days are dropped
+  updated INTEGER NOT NULL,   -- ms; dropped 30 days after this once no alerts are left
   last_test INTEGER,          -- ms; rate-limits /api/send
   invalid INTEGER NOT NULL DEFAULT 0  -- push service rejected the device's VAPID signature (401/403)
 );

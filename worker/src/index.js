@@ -13,7 +13,7 @@
 // killed or overlaps the next one can lose an alert, but never send it twice.
 
 const MAX_ALERTS = 60;
-const MAX_AHEAD = 8 * 86400e3; // furthest an alert may be booked
+const MAX_AHEAD = 130 * 86400e3; // furthest an alert may be booked (the app books up to 120 days ahead across gaps between ISS seasons)
 const MAX_BODY = 4096; // push services' limit on the encrypted body
 const STALE = 10 * 60e3; // alerts we could not deliver within 10 min are dropped
 // The cron runs once a minute and sends alerts due within the next DUE_AHEAD,
@@ -317,12 +317,16 @@ export async function sendDue(env, now = Date.now()) {
   return stats;
 }
 
+// A subscription expires when it hasn't been refreshed for SUB_EXPIRY and has
+// nothing left to deliver: between ISS seasons the next alert can be months
+// away, and only its delivery makes the phone upload again.
+const EXPIRED = 'SELECT id FROM subscriptions s WHERE s.updated < ?1 AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.sub_id = s.id)';
+
 async function cleanup(env, now = Date.now()) {
   const old = now - SUB_EXPIRY;
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM alerts WHERE sub_id IN (SELECT id FROM subscriptions WHERE updated < ?)').bind(old),
-    env.DB.prepare('DELETE FROM sent WHERE sub_id IN (SELECT id FROM subscriptions WHERE updated < ?)').bind(old),
-    env.DB.prepare('DELETE FROM subscriptions WHERE updated < ?').bind(old),
+    env.DB.prepare(`DELETE FROM sent WHERE sub_id IN (${EXPIRED})`).bind(old),
+    env.DB.prepare(`DELETE FROM subscriptions WHERE id IN (${EXPIRED})`).bind(old),
     env.DB.prepare('DELETE FROM sent WHERE sent_at < ?').bind(now - SENT_KEEP),
   ]);
 }

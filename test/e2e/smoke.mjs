@@ -99,8 +99,8 @@ await step('visible passes listed with scores', async () => {
 
 await step('alerts settings bound to their defaults', async () => {
   await page.goto(origin + '/#alerts');
-  const v = await page.evaluate(() => ['minElevation', 'minScore', 'notifyFrom', 'notifyTo', 'leadMinutes', 'headsUpHours', 'horizonHours'].map((id) => document.getElementById(id).value));
-  expect(JSON.stringify(v) === JSON.stringify(['25', '30', '360', '1320', '10', '0', '48']), `settings: ${v}`);
+  const v = await page.evaluate(() => ['minElevation', 'minScore', 'notifyFrom', 'notifyTo', 'leadMinutes'].map((id) => document.getElementById(id).value));
+  expect(JSON.stringify(v) === JSON.stringify(['25', '30', '360', '1320', '15']), `settings: ${v}`);
   expect((await page.textContent('#criteriaPreview')).includes('visible passes'), 'criteria preview rendered');
   expect((await page.textContent('#notifyWindowOut')) === '06:00 – 22:00', 'time window shown');
 });
@@ -177,6 +177,31 @@ await step('"look up now" alert re-checks the clouds before showing', async () =
     (await import('/js/core/store.js')).saveSettings({ pushEnabled: false });
     (await (await navigator.serviceWorker.ready).getNotifications()).forEach((n) => n.close());
   });
+  cloudCover = null;
+});
+
+await step('"season is back" notice is shown, counting the coming week from fresh data', async () => {
+  cloudCover = 0;
+  const cdp = await ctx.newCDPSession(page);
+  const registered = new Promise((resolve) => cdp.on('ServiceWorker.workerRegistrationUpdated', ({ registrations }) => {
+    const r = registrations.find((x) => x.scopeURL.startsWith(origin) && !x.isDeleted);
+    if (r) resolve(r.registrationId);
+  }));
+  await cdp.send('ServiceWorker.enable');
+  const notice = { title: '🛰️ ISS season is back', body: 'as booked', tag: 'season', url: origin + '/#passes', kind: 'season' };
+  await cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId: await registered, data: JSON.stringify(notice) });
+  let shown;
+  for (let i = 0; i < 50 && !shown; i++) {
+    shown = await page.evaluate(async () => {
+      const [n] = await (await navigator.serviceWorker.ready).getNotifications({ tag: 'season' });
+      return n && { title: n.title, body: n.body };
+    });
+    if (!shown) await page.waitForTimeout(200);
+  }
+  expect(shown?.title === notice.title, `shown: ${JSON.stringify(shown)}`);
+  // whether the fixture orbit has passes this week depends on the date: either a count or the booked text
+  expect(/^Did you miss it\? \d+ pass/.test(shown.body) || shown.body === 'as booked', `body: ${shown.body}`);
+  await page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).forEach((n) => n.close()));
   cloudCover = null;
 });
 

@@ -33,17 +33,15 @@ export const DEFAULT_SETTINGS = {
   minScore: 30,
   notifyFrom: 360, // only passes appearing between these times of day (minutes, location's time zone)
   notifyTo: 1320,
-  leadMinutes: 10,
-  headsUpHours: 0, // extra notification this many hours before a good pass (0 = off)
-  horizonHours: 48, // how far ahead alerts are booked on the relay (at least 48: see README, background refresh)
+  leadMinutes: 15,
   pushEnabled: false,
 };
 
 export async function getSettings() {
-  const { pushServer, ...saved } = (await get('settings')) || {}; // pushServer: no longer a setting
+  // settings that no longer exist: relay URL, heads-up, booking window
+  const { pushServer, headsUpHours, horizonHours, ...saved } = (await get('settings')) || {};
   const s = { ...DEFAULT_SETTINGS, ...saved };
-  // 24 h was an option once; Chrome's background refresh runs about daily, so a 24 h window leaves gaps
-  s.horizonHours = Math.max(48, s.horizonHours);
+  if (s.leadMinutes < 5) s.leadMinutes = 5; // 3 min is no longer offered
   return s;
 }
 

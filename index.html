@@ -49,9 +49,9 @@
       <div class="card">
         <div class="card-head"><h2>🔔 Push notifications</h2><label class="switch"><input type="checkbox" id="pushEnabled"><span></span></label></div>
         <ul class="status" id="pushStatus"></ul>
-        <div class="field"><label for="horizonHours">Book alerts up to</label>
-          <select id="horizonHours"><option value="48">48 h ahead</option><option value="72">72 h ahead</option><option value="96">96 h ahead</option></select></div>
-        <p class="hint">The forecast is re-checked whenever you open the app, whenever an alert arrives and, if installed, in the background. A shorter window means fresher weather in your alerts.</p>
+        <div class="field"><label for="leadMinutes">Alert me before it appears</label>
+          <select id="leadMinutes"><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option></select></div>
+        <p class="hint">Alerts are booked for every matching pass in the next 14 days. Each alert that arrives re-checks the orbit and the forecast and books the next ones. Before a longer stretch without passes, you get a "season is back" notice a few hours before the next ones.</p>
         <div class="row"><button class="btn ghost" id="pushTest" type="button">Send test</button><button class="btn ghost" id="pushSync" type="button">Schedule now</button></div>
       </div>
 
@@ -70,13 +70,6 @@
         <p class="hint" id="criteriaPreview"></p>
       </div>
 
-      <div class="card">
-        <h2>Notification timing</h2>
-        <div class="field"><label for="leadMinutes">Alert me before it appears</label>
-          <select id="leadMinutes"><option value="3">3 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option></select></div>
-        <div class="field"><label for="headsUpHours">Also give me a heads-up</label>
-          <select id="headsUpHours"><option value="0">No</option><option value="1">1 h before</option><option value="2">2 h before</option><option value="4">4 h before</option><option value="8">8 h before</option></select></div>
-      </div>
     </section>
 
     <!-- ABOUT -->
@@ -101,8 +94,7 @@
           <li><b>Orbit:</b> the ISS position is computed on your device with the standard SGP4 model, from orbital elements published by NORAD via CelesTrak and refreshed several times a day. Predictions are typically accurate to a few seconds.</li>
           <li><b>Visibility:</b> a pass counts only when the ISS is sunlit, your sky is dark and it's at least 10° up. Each visible pass gets a score; see below.</li>
           <li><b>Weather:</b> hourly cloud forecasts from Open-Meteo for your location.</li>
-          <li><b>Notifications:</b> your phone works out which passes are worth it, then encrypts and signs each alert itself. A small relay server only holds these sealed messages and sends each one at the right time, even when the app is closed. It can't read them, and it never learns where you are. When the forecast changes, the bookings are replaced, so a pass that clouds over is silently dropped. Each arriving alert also re-checks the forecast: a heads-up re-books the later alerts, and a "look up now" alert tells you if clouds moved in since it was booked.</li>
-          <li><b>Background refresh:</b> Chrome refreshes the forecast in the background only for apps you use, and less often the less you use them. The app estimates Chrome's usage score on your device. If the score is about to drop too low, the app sends a "Still want ISS pass alerts?" reminder, and tapping it keeps the refresh going. If you ignore it, no more reminders come until you use the app again.</li>
+          <li><b>Notifications:</b> your phone works out which passes are worth it, then encrypts and signs each alert itself. A small relay server only holds these sealed messages and sends each one at the right time, even when the app is closed. It can't read them, and it never learns where you are. Nothing runs in the background, so each alert that arrives does the re-checking: it tells you if clouds moved in since it was booked, and it re-books the following two weeks with the latest orbit data and forecast. Between ISS seasons, a notice a few hours before the next passes starts the cycle again. If your device is off or offline for all of them, open the app once to restart.</li>
         </ul>
       </div>
 
@@ -141,7 +133,7 @@
 
       <div class="card">
         <h2>Privacy</h2>
-        <p class="hint">Your location stays on your device. The weather service receives it rounded to about 1 km. Turning on GPS, or long-pressing the map, also looks up a place name. The app's estimate of how much you use it never leaves your device. There are no accounts, no tracking and no ads.</p>
+        <p class="hint">Your location stays on your device. The weather service receives it rounded to about 1 km. Turning on GPS, or long-pressing the map, also looks up a place name. There are no accounts, no tracking and no ads.</p>
       </div>
 
       <div class="card">
@@ -155,7 +147,7 @@
         <ul class="status" id="appStatus"></ul>
         <div class="row"><button class="btn" id="installBtn" type="button" hidden>⬇️ Install app</button><button class="btn ghost" id="refreshTle" type="button">Refresh orbit data</button></div>
         <details class="log"><summary>Notification scheduling log</summary><ul id="logList"></ul>
-          <p class="hint" id="logEmpty" hidden>Nothing yet. Each time notifications are scheduled (when you open the app, when a notification arrives, or in the background) a line appears here. This needs push notifications turned on under Alerts.</p></details>
+          <p class="hint" id="logEmpty" hidden>Nothing yet. Each time notifications are scheduled (when you open the app or when a notification arrives) a line appears here. This needs push notifications turned on under Alerts.</p></details>
       </div>
 
       <div class="card">

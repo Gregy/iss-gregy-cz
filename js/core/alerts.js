@@ -2,18 +2,28 @@
 // scores them against the forecast and books the resulting notifications on
 // the push relay. Every sync uploads the complete list of upcoming alerts, so a
 // pass that no longer qualifies simply disappears from the relay's schedule.
+//
+// Nothing runs in the background: the schedule is renewed when the app is
+// opened and whenever a booked notification arrives. So it books every
+// matching pass of the next BOOK_DAYS, and before a longer stretch without
+// passes it books "season" notices ahead of the next ones, whose arrival
+// re-books everything with fresh orbit data and forecast.
 import { compass, makeObserver } from './astro.js';
 import { predictPasses } from './passes.js';
 import { fetchWeather, scorePass, passWeather, clearSkyFactor } from './weather.js';
 import { loadTle } from './tle.js';
 import { prepareAlerts, uploadSchedule, retryPendingForgets, subscribe } from './push.js';
-import { plannedNudge } from './engagement.js';
 import * as store from './store.js';
 import { PUSH_SERVER } from '../config.js';
 
 const WEATHER_MAX_AGE = 45 * 60e3;
+const DAY = 86400e3;
 const MAX_ALERTS = 60; // the relay's limit per subscription
-const NUDGE_AHEAD = 7 * 86400e3; // the relay books at most 8 days ahead; later syncs book a later reminder
+export const BOOK_DAYS = 14; // "look up now" alerts for every matching pass this far ahead
+export const WEATHER_HOURS = 48; // beyond this the cloud forecast is too uncertain to drop a pass for
+export const LOOKAHEAD_DAYS = 120; // how far to look for the next passes after a long stretch without any
+export const SEASON_PASSES = 5; // season notices before this many passes, in case the phone misses some
+const SEASON_LEAD = 3 * 3600e3; // a season notice comes this long before its pass
 const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
 
 export async function loadWeather(loc, { maxAge = WEATHER_MAX_AGE } = {}) {
@@ -50,14 +60,20 @@ export function localMinutes(t, tz) {
   return get('hour') * 60 + get('minute');
 }
 
-/** Does a pass meet the alert criteria? `tz` is the location's time zone, for the time-of-day window. */
-export function qualifies(p, s, tz) {
+/**
+ * Does a pass meet the alert criteria? `tz` is the location's time zone, for
+ * the time-of-day window. Within WEATHER_HOURS of `now` the score includes the
+ * cloud forecast; further out it is the clear-sky score, since a forecast that
+ * far ahead shouldn't cancel an alert (the arriving alert re-checks the clouds).
+ */
+export function qualifies(p, s, tz, now = Date.now()) {
   const r = p.rating;
   if (!p.visible || !r) return false;
   if (p.visible.max.el < s.minElevation) return false;
   const appears = localMinutes(p.visible.start.t, tz);
   if (appears < s.notifyFrom || appears > s.notifyTo) return false;
-  return r.score >= s.minScore;
+  const score = p.visible.start.t - now <= WEATHER_HOURS * 3600e3 ? r.score : r.geo;
+  return score >= s.minScore;
 }
 
 // ---------- formatting ----------
@@ -92,30 +108,61 @@ export function describePass(p, tz) {
 
 // ---------- schedule ----------
 
-/** Notifications to book for qualifying passes within the horizon. */
+/** `t` moved into daytime (08:00–21:00 in `tz`), earlier rather than later: a notice must come before its pass. */
+export function daytime(t, tz) {
+  const m = localMinutes(t, tz);
+  if (m < 8 * 60) return t - (m + 4 * 60) * 60e3; // night or early morning: 20:00 the evening before
+  if (m > 21 * 60) return t - (m - 20 * 60) * 60e3; // late evening: 20:00
+  return t;
+}
+
+/** "tonight", "tomorrow", "on Friday": when `t` is, as seen at `now`. */
+const dayPhrase = (t, tz, now) => {
+  const d = fmtDay(t, tz, now);
+  return ['Tonight', 'Today', 'Tomorrow'].includes(d) ? d.toLowerCase() : `on ${d}`;
+};
+
+const seasonNotice = (baseUrl, at, id, body) => ({
+  id, at, kind: 'season', tag: 'season', url: `${baseUrl}#passes`, title: '🛰️ ISS season is back', body,
+});
+
+/**
+ * Notifications to book: a "look up now" alert for every qualifying pass of the
+ * next BOOK_DAYS. If there is none, season notices before the next
+ * SEASON_PASSES qualifying passes (orbit predictions that far out are only
+ * good to the day, which is all a notice needs); if there are none at all
+ * within the passes given, one notice at their end, to look again.
+ */
 export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) {
-  const horizon = now + settings.horizonHours * 3600e3;
+  const tz = loc.tz;
+  const good = passes.filter((p) => qualifies(p, settings, tz, now));
   const out = [];
-  for (const p of passes) {
-    if (!qualifies(p, settings, loc.tz)) continue;
+  for (const p of good) {
     const v = p.visible;
-    const d = describePass(p, loc.tz);
-    const common = { tag: p.id, url: `${baseUrl}#pass=${p.id}`, body: `${d.path}\n${d.stats}` };
-    const lead = v.start.t - settings.leadMinutes * 60e3;
-    if (lead > now && lead <= horizon) {
-      // what the phone needs to re-score the pass against the latest forecast when the alert arrives
-      const f = p.rating.factors;
-      const check = { t: [v.start.t, v.max.t, v.end.t], geo: f.brightness * f.darkSky * f.duration, score: p.rating.score };
-      out.push({ ...common, id: `${p.id}-lead`, at: lead, kind: 'lead', title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}`, check });
-    }
-    if (settings.headsUpHours > 0) {
-      const ahead = v.start.t - settings.headsUpHours * 3600e3;
-      if (ahead > now && ahead <= horizon) {
-        out.push({ ...common, id: `${p.id}-ahead`, at: ahead, kind: 'info', title: `🛰️ ${fmtDay(v.start.t, loc.tz, ahead)} ${fmtTime(v.start.t, loc.tz)}: good ISS pass` });
-      }
-    }
+    const at = v.start.t - settings.leadMinutes * 60e3;
+    if (at <= now || at > now + BOOK_DAYS * DAY) continue;
+    const d = describePass(p, tz);
+    // what the phone needs to re-score the pass against the latest forecast when the alert arrives
+    const f = p.rating.factors;
+    const check = { t: [v.start.t, v.max.t, v.end.t], geo: f.brightness * f.darkSky * f.duration, score: p.rating.score };
+    out.push({
+      id: `${p.id}-lead`, at, kind: 'lead', tag: p.id, url: `${baseUrl}#pass=${p.id}`,
+      title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}`, body: `${d.path}\n${d.stats}`, check,
+    });
   }
-  return out.sort((a, b) => a.at - b.at).slice(0, MAX_ALERTS);
+  if (out.length) return out.slice(0, MAX_ALERTS);
+
+  const later = good.filter((p) => p.visible.start.t > now + BOOK_DAYS * DAY).slice(0, SEASON_PASSES);
+  for (const p of later) {
+    const at = daytime(p.visible.start.t - SEASON_LEAD, tz);
+    if (at > now) out.push(seasonNotice(baseUrl, at, `${p.id}-season`, `Visible passes are back, the first ${dayPhrase(p.visible.start.t, tz, at)} around ${fmtTime(p.visible.start.t, tz)}. Open the app for the forecast.`));
+  }
+  if (!later.length && passes.length) {
+    // nothing matches for months (e.g. summer nights too short at high latitudes): look again then
+    const at = daytime(passes[passes.length - 1].rise.t - DAY, tz);
+    if (at > now) out.push(seasonNotice(baseUrl, at, 'season-check', 'No ISS passes match your settings for now. The app keeps watching.'));
+  }
+  return out;
 }
 
 // ---------- at delivery ----------
@@ -156,11 +203,47 @@ export async function freshenLeadAlert(d) {
   return wx ? leadAlertUpdate(d, wx, settings.minScore) : d;
 }
 
-/** Chrome's background refresh is set up for this app, so its engagement score matters. */
-async function refreshNeedsEngagement(registration) {
-  if (!registration.periodicSync) return false; // Firefox, Safari: no background refresh to keep alive
-  const tags = await registration.periodicSync.getTags().catch(() => []);
-  return tags.includes('iss-check');
+/**
+ * A season notice rewritten from `passes`, a fresh prediction for the coming
+ * week: how many passes match and when the first is. Pure, so it can be tested.
+ */
+export function seasonAlertUpdate(d, passes, settings, tz, now) {
+  const good = passes.filter((p) => p.visible && p.visible.start.t > now && p.visible.start.t <= now + 7 * DAY && qualifies(p, settings, tz, now));
+  if (!good.length) return d;
+  const first = good[0].visible.start.t;
+  const n = good.length;
+  return {
+    ...d,
+    body: `Did you miss it? ${n} ${n === 1 ? 'pass' : 'passes'} worth watching in the next 7 days, the first ${dayPhrase(first, tz, now)} at ${fmtTime(first, tz)}.`,
+  };
+}
+
+const FRESH_SEASON_TIMEOUT = 6000;
+
+async function freshenSeasonAlert(d) {
+  const [loc, settings] = await Promise.all([store.get('location'), store.getSettings()]);
+  if (!loc) return d;
+  const timeout = new Promise((resolve) => setTimeout(resolve, FRESH_SEASON_TIMEOUT, null));
+  const fresh = await Promise.race([computeForecast(loc, { hours: 7 * 24 + 1, weatherMaxAge: 5 * 60e3 }), timeout]);
+  return fresh ? seasonAlertUpdate(d, fresh.passes, settings, loc.tz, Date.now()) : d;
+}
+
+/** An arriving notification brought up to date before it is shown; as booked if that fails. */
+export function freshenAlert(d) {
+  if (d.kind === 'lead') return freshenLeadAlert(d);
+  if (d.kind === 'season') return freshenSeasonAlert(d);
+  return Promise.resolve(d);
+}
+
+const when = (t) => new Date(t).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const plural = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+
+/** One line about what was booked, for the log and the status. */
+export function scheduleSummary(s) {
+  if (s.booked) return `${plural(s.good, 'notification-worthy pass', 'notification-worthy passes')} in the next ${BOOK_DAYS} days, ${plural(s.booked, 'notification')} scheduled, next ${when(s.next)}`;
+  if (s.lookAgain) return `no passes match your settings in the next ${LOOKAHEAD_DAYS} days; the app looks again ${when(s.season)}`;
+  if (s.season) return `no passes in the next ${BOOK_DAYS} days; a "season is back" notice comes ${when(s.season)}`;
+  return 'no passes match your settings';
 }
 
 /**
@@ -185,22 +268,28 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
   if (!sub) return skip('not subscribed');
 
   try {
-    const { passes, weather } = await computeForecast(loc, { hours: settings.horizonHours + 1, from: now, weatherMaxAge });
+    const { passes, weather, tle, observer } = await computeForecast(loc, { hours: BOOK_DAYS * 24 + 1, from: now, weatherMaxAge });
     // without any forecast every pass would look clear; keep the previous bookings instead
     if (!weather) throw new Error('no weather forecast available, previous alerts kept');
-    const alerts = buildSchedule(passes, settings, loc, baseUrl, now);
-    // keep Chrome's engagement up where it gates the background refresh (see engagement.js)
-    const nudge = (await refreshNeedsEngagement(registration)) ? await plannedNudge(now) : null;
-    if (nudge && nudge.at <= now + NUDGE_AHEAD) {
-      alerts.length = Math.min(alerts.length, MAX_ALERTS - 1);
-      alerts.push({ ...nudge, url: `${baseUrl}#alerts` });
+    let alerts = buildSchedule(passes, settings, loc, baseUrl, now);
+    if (!alerts.some((a) => a.kind === 'lead')) {
+      // a long stretch without passes: look months ahead for where they resume
+      const far = predictPasses(tle.satrec, observer, now, LOOKAHEAD_DAYS * 24);
+      for (const p of far) p.rating = scorePass(p, weather);
+      alerts = buildSchedule(far, settings, loc, baseUrl, now);
     }
-    const good = passes.filter((p) => qualifies(p, settings, loc.tz)).length;
+    const good = passes.filter((p) => qualifies(p, settings, loc.tz, now)).length;
+    const leads = alerts.filter((a) => a.kind === 'lead');
+    const state = {
+      good, booked: leads.length, next: leads[0]?.at ?? null, until: leads.at(-1)?.at ?? null,
+      season: leads.length ? null : alerts[0]?.at ?? null, // a season notice, or the look-again notice
+      lookAgain: alerts.some((a) => a.id === 'season-check'),
+    };
     const digest = PUSH_SERVER + sub.endpoint + JSON.stringify(alerts);
     const last = await store.get('push');
     if (!force && last?.digest === digest && now - last.t < RESYNC_UNCHANGED) {
-      await store.set('lastCheck', { t: now, source, good, booked: last.booked, next: last.next, nudge: last.nudge, unchanged: true });
-      return { good, booked: last.booked, next: last.next, unchanged: true };
+      await store.set('lastCheck', { t: now, source, ...state, unchanged: true });
+      return { ...state, unchanged: true };
     }
     let r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
     if (r.invalid) {
@@ -211,15 +300,10 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
       r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
       await store.log(source, 'the push service no longer accepted this device; set it up again');
     }
-    // the status line and log count pass alerts; the reminder is reported apart
-    const nudged = alerts.some((a) => a.kind === 'nudge');
-    r = { ...r, booked: Math.max(0, r.booked - (nudged ? 1 : 0)), next: alerts.find((a) => a.kind !== 'nudge')?.at ?? null, nudge: nudged ? nudge.at : null };
-    await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next, nudge: r.nudge });
-    await store.set('lastCheck', { t: now, source, good, booked: r.booked, next: r.next, nudge: r.nudge });
-    const n = (k, one) => `${k} ${one}${k === 1 ? '' : 's'}`;
-    const when = (t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-    await store.log(source, `${n(good, 'notification-worthy pass')}, ${n(r.booked, 'notification')} scheduled${r.next ? ', next ' + when(r.next) : ''}${r.nudge ? `; "still interested?" reminder ${when(r.nudge)}` : ''}`);
-    return { good, booked: r.booked, next: r.next };
+    await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts) });
+    await store.set('lastCheck', { t: now, source, ...state });
+    await store.log(source, scheduleSummary(state));
+    return state;
   } catch (e) {
     const error = String(e.message || e);
     await store.set('lastCheck', { t: now, source, error });
