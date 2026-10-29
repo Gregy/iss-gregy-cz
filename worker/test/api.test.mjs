@@ -19,11 +19,18 @@ const put = (body, e) => req('PUT', '/api/schedule', body, e);
 const error = async (res) => (await res.json()).error;
 
 test('rejects endpoints that are not known push services', async () => {
-  for (const endpoint of ['https://evil.example/push', 'http://fcm.googleapis.com/fcm/send/x', 'https://fcm.googleapis.com.evil.example/x', 'file:///etc/passwd', 'not a url']) {
+  for (const endpoint of ['https://evil.example/push', 'http://fcm.googleapis.com/fcm/send/x', 'https://fcm.googleapis.com.evil.example/x', 'file:///etc/passwd', 'not a url',
+    'https://script.google.com/macros/s/x/exec', 'https://jmt17.google.com/macros/x', 'https://jmt17.google.com.evil.example/fcm/send/x', 'https://fcm.googleapis.com:8443/fcm/send/x']) {
     const res = await put({ endpoint, owner, alerts: [] });
     assert.equal(res.status, 400, endpoint);
     assert.equal(res.headers.get('access-control-allow-origin'), 'https://me.github.io', 'errors still carry CORS headers');
   }
+});
+
+test('accepts FCM endpoints under jmtN.google.com', async () => {
+  const res = await put({ endpoint: 'https://jmt17.google.com/fcm/send/abc:def', owner, alerts: 'nope' });
+  assert.equal(res.status, 400);
+  assert.match(await error(res), /alerts must be an array/, 'got past the endpoint check');
 });
 
 test('ALLOW_ANY_ENDPOINT is required for non-push hosts', async () => {

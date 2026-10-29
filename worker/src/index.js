@@ -31,11 +31,15 @@ const PER_SUB_BATCH = 3; // one subscription can't crowd out the rest
 const MAX_SUBSCRIPTIONS = 1000;
 
 // Only real push services: otherwise the relay would POST to any URL it is given.
-const PUSH_HOSTS = [
-  /^fcm\.googleapis\.com$/, /^android\.googleapis\.com$/, // Chrome, Edge on Android, Samsung, Opera
-  /(^|\.)push\.services\.mozilla\.com$/, // Firefox
-  /(^|\.)push\.apple\.com$/, // Safari / iOS
-  /\.notify\.windows\.com$/, // Edge on Windows
+// [hostname, path] patterns.
+const PUSH_SERVICES = [
+  [/^fcm\.googleapis\.com$/], [/^android\.googleapis\.com$/], // Chrome, Edge on Android, Samsung, Opera
+  // FCM under google.com, seen from Chromium builds (e.g. Brave). Only these hosts and this
+  // path: other google.com hosts run anyone's code (Apps Script), so no blanket google.com.
+  [/^jmt\d+\.google\.com$/, /^\/fcm\/send\//],
+  [/(^|\.)push\.services\.mozilla\.com$/], // Firefox
+  [/(^|\.)push\.apple\.com$/], // Safari / iOS
+  [/\.notify\.windows\.com$/], // Edge on Windows
 ];
 
 class HttpError extends Error {
@@ -87,7 +91,7 @@ function validEndpoint(endpoint, env) {
   let u;
   try { u = new URL(endpoint); } catch { return false; }
   if (env.ALLOW_ANY_ENDPOINT === 'true') return u.protocol === 'https:' || u.protocol === 'http:'; // local tests only
-  return u.protocol === 'https:' && PUSH_HOSTS.some((re) => re.test(u.hostname));
+  return u.protocol === 'https:' && !u.port && PUSH_SERVICES.some(([host, path]) => host.test(u.hostname) && (!path || path.test(u.pathname)));
 }
 
 /**
