@@ -438,7 +438,8 @@ function setupAlertsView() {
         await saveSetting({ pushEnabled: true });
         await registerPeriodicSync();
         const r = await runPushSync('enabled', true);
-        if (r.error) throw new Error(r.error);
+        // name the push service the relay refused, so it can be added
+        if (r.error) throw new Error(/push endpoint/.test(r.error) ? `${r.error} (${hostOf((await getSubscription())?.endpoint || '')})` : r.error);
         toast(r.booked ? `Notifications on: ${plural(r.booked, 'notification')} scheduled` : 'Notifications on. No passes match your settings yet.');
       } else {
         await saveSetting({ pushEnabled: false });
