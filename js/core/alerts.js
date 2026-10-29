@@ -7,10 +7,13 @@ import { predictPasses } from './passes.js';
 import { fetchWeather, scorePass, passWeather, clearSkyFactor } from './weather.js';
 import { loadTle } from './tle.js';
 import { prepareAlerts, uploadSchedule, retryPendingForgets, subscribe } from './push.js';
+import { plannedNudge } from './engagement.js';
 import * as store from './store.js';
 import { PUSH_SERVER } from '../config.js';
 
 const WEATHER_MAX_AGE = 45 * 60e3;
+const MAX_ALERTS = 60; // the relay's limit per subscription
+const NUDGE_AHEAD = 7 * 86400e3; // the relay books at most 8 days ahead; later syncs book a later reminder
 const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
 
 export async function loadWeather(loc, { maxAge = WEATHER_MAX_AGE } = {}) {
@@ -112,7 +115,7 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
       }
     }
   }
-  return out.sort((a, b) => a.at - b.at).slice(0, 60);
+  return out.sort((a, b) => a.at - b.at).slice(0, MAX_ALERTS);
 }
 
 // ---------- at delivery ----------
@@ -153,6 +156,13 @@ export async function freshenLeadAlert(d) {
   return wx ? leadAlertUpdate(d, wx, settings.minScore) : d;
 }
 
+/** Chrome's background refresh is set up for this app, so its engagement score matters. */
+async function refreshNeedsEngagement(registration) {
+  if (!registration.periodicSync) return false; // Firefox, Safari: no background refresh to keep alive
+  const tags = await registration.periodicSync.getTags().catch(() => []);
+  return tags.includes('iss-check');
+}
+
 /**
  * Recompute the alert schedule and upload it, encrypted and signed, for this
  * device's push subscription. `registration` is the ServiceWorkerRegistration
@@ -179,11 +189,17 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
     // without any forecast every pass would look clear; keep the previous bookings instead
     if (!weather) throw new Error('no weather forecast available, previous alerts kept');
     const alerts = buildSchedule(passes, settings, loc, baseUrl, now);
+    // keep Chrome's engagement up where it gates the background refresh (see engagement.js)
+    const nudge = (await refreshNeedsEngagement(registration)) ? await plannedNudge(now) : null;
+    if (nudge && nudge.at <= now + NUDGE_AHEAD) {
+      alerts.length = Math.min(alerts.length, MAX_ALERTS - 1);
+      alerts.push({ ...nudge, url: `${baseUrl}#alerts` });
+    }
     const good = passes.filter((p) => qualifies(p, settings, loc.tz)).length;
     const digest = PUSH_SERVER + sub.endpoint + JSON.stringify(alerts);
     const last = await store.get('push');
     if (!force && last?.digest === digest && now - last.t < RESYNC_UNCHANGED) {
-      await store.set('lastCheck', { t: now, source, good, booked: last.booked, next: last.next, unchanged: true });
+      await store.set('lastCheck', { t: now, source, good, booked: last.booked, next: last.next, nudge: last.nudge, unchanged: true });
       return { good, booked: last.booked, next: last.next, unchanged: true };
     }
     let r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
@@ -195,10 +211,14 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
       r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
       await store.log(source, 'the push service no longer accepted this device; set it up again');
     }
-    await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next });
-    await store.set('lastCheck', { t: now, source, good, booked: r.booked, next: r.next });
+    // the status line and log count pass alerts; the reminder is reported apart
+    const nudged = alerts.some((a) => a.kind === 'nudge');
+    r = { ...r, booked: Math.max(0, r.booked - (nudged ? 1 : 0)), next: alerts.find((a) => a.kind !== 'nudge')?.at ?? null, nudge: nudged ? nudge.at : null };
+    await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts), booked: r.booked, next: r.next, nudge: r.nudge });
+    await store.set('lastCheck', { t: now, source, good, booked: r.booked, next: r.next, nudge: r.nudge });
     const n = (k, one) => `${k} ${one}${k === 1 ? '' : 's'}`;
-    await store.log(source, `${n(good, 'notification-worthy pass')}, ${n(r.booked, 'notification')} scheduled${r.next ? ', next ' + new Date(r.next).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : ''}`);
+    const when = (t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    await store.log(source, `${n(good, 'notification-worthy pass')}, ${n(r.booked, 'notification')} scheduled${r.next ? ', next ' + when(r.next) : ''}${r.nudge ? `; "still interested?" reminder ${when(r.nudge)}` : ''}`);
     return { good, booked: r.booked, next: r.next };
   } catch (e) {
     const error = String(e.message || e);

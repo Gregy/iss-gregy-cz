@@ -3,7 +3,7 @@
   "short_name": "ISS Tracker",
   "description": "Live ISS position and alerts for visible passes, scored by weather, sky darkness and geometry.",
   "id": "./",
-  "start_url": "./#live",
+  "start_url": "./?from=icon#live",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",

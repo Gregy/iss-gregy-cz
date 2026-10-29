@@ -3,6 +3,7 @@
 // (fresh forecast) driven by Periodic Background Sync.
 import { syncPush, freshenLeadAlert } from './js/core/alerts.js';
 import { forget, subscribe } from './js/core/push.js';
+import { recordNotificationClick, recordNudgeShown } from './js/core/engagement.js';
 import * as store from './js/core/store.js';
 import { APP_VERSION } from './js/config.js';
 
@@ -20,7 +21,7 @@ const SHELL_FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/ui/map.js', 'js/ui/skychart.js',
   'js/core/astro.js', 'js/core/passes.js', 'js/core/weather.js', 'js/core/store.js',
-  'js/core/tle.js', 'js/core/alerts.js', 'js/core/push.js', 'js/core/webpush.js', 'js/config.js',
+  'js/core/tle.js', 'js/core/alerts.js', 'js/core/push.js', 'js/core/webpush.js', 'js/core/engagement.js', 'js/config.js',
   'vendor/satellite.esm.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/badge-96.png', 'icons/icon.svg',
 ];
@@ -100,6 +101,8 @@ self.addEventListener('push', (e) => {
   e.waitUntil((async () => {
     // "look up now": re-check the clouds first (a few seconds at most)
     d = await freshenLeadAlert(d).catch(() => d);
+    // a reminder nobody taps stops further ones (see engagement.js)
+    if (d.kind === 'nudge') await recordNudgeShown().catch(() => {});
     await self.registration.showNotification(d.title || 'ISS Pass Tracker', {
       body: d.body,
       tag: d.tag,
@@ -139,14 +142,17 @@ self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   const url = e.notification.data?.url || self.registration.scope;
   e.waitUntil((async () => {
+    // open first: the browser allows a window only shortly after the click
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const c of all) {
-      if (c.url.startsWith(self.registration.scope)) {
-        await c.focus();
-        c.postMessage({ type: 'open', url });
-        return;
-      }
+    const open = all.find((c) => c.url.startsWith(self.registration.scope));
+    if (open) {
+      await open.focus();
+      open.postMessage({ type: 'open', url });
+    } else {
+      await self.clients.openWindow(url);
     }
-    await self.clients.openWindow(url);
+    // Chrome counts the click as engagement; so does the estimate, which moves the next reminder out
+    await recordNotificationClick().catch(() => {});
+    if (e.notification.tag === 'nudge') await backgroundSync('nudge').catch(() => {});
   })());
 });

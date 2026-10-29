@@ -102,6 +102,7 @@
           <li><b>Visibility:</b> a pass counts only when the ISS is sunlit, your sky is dark and it's at least 10° up. Each visible pass gets a score; see below.</li>
           <li><b>Weather:</b> hourly cloud forecasts from Open-Meteo for your location.</li>
           <li><b>Notifications:</b> your phone works out which passes are worth it, then encrypts and signs each alert itself. A small relay server only holds these sealed messages and sends each one at the right time, even when the app is closed. It can't read them, and it never learns where you are. When the forecast changes, the bookings are replaced, so a pass that clouds over is silently dropped. Each arriving alert also re-checks the forecast: a heads-up re-books the later alerts, and a "look up now" alert tells you if clouds moved in since it was booked.</li>
+          <li><b>Background refresh:</b> Chrome refreshes the forecast in the background only for apps you use, and less often the less you use them. The app estimates Chrome's usage score on your device. If the score is about to drop too low, the app sends a "Still want ISS pass alerts?" reminder, and tapping it keeps the refresh going. If you ignore it, no more reminders come until you use the app again.</li>
         </ul>
       </div>
 
@@ -140,7 +141,7 @@
 
       <div class="card">
         <h2>Privacy</h2>
-        <p class="hint">Your location stays on your device. The weather service receives it rounded to about 1 km. Turning on GPS, or long-pressing the map, also looks up a place name. There are no accounts, no tracking and no ads.</p>
+        <p class="hint">Your location stays on your device. The weather service receives it rounded to about 1 km. Turning on GPS, or long-pressing the map, also looks up a place name. The app's estimate of how much you use it never leaves your device. There are no accounts, no tracking and no ads.</p>
       </div>
 
       <div class="card">

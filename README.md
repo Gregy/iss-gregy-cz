@@ -49,32 +49,65 @@ Periodic Background Sync exists only in Chromium browsers (Chrome, Edge, Samsung
 
 Chrome doesn't honour the requested interval. How often it fires depends on the site's **engagement score** ([design doc](https://www.chromium.org/developers/design-documents/site-engagement/)). Values below are Chromium's defaults, read from the source (`components/site_engagement/content/site_engagement_score.cc`, `chrome/browser/background_sync/background_sync_delegate_impl.{h,cc}`, `content/public/browser/background_sync_parameters.cc`):
 
-**The score** (per site, 0–100):
+**The score** (per site, 0–100), as `SiteEngagementScore` computes it:
 
 | Event | Points |
 |---|---|
-| first engagement of the day | +1.5 |
-| navigation the user starts (typed URL, bookmark, launching the installed app) | +1.5 |
-| user input (tap, scroll, key press) | +0.6 each |
-| interacting with one of the site's notifications | +1 |
+| first engagement of the day (local midnight) | +1.5, added to that engagement |
+| navigation the user starts: typed URL, bookmark, launching the installed app. Not links, not windows opened by a notification click | +1.5 |
+| user input: key down, mouse down, touch start, scroll start. Counted from 10 s after the page loads (5 s after it becomes visible again), then at most once per 10 s | +0.6 |
+| click on one of the site's notifications | +1 |
 | visible / hidden media playback | +0.06 / +0.01 |
 | daily maximum | 15 |
-| installed-app bonus: launched from its icon within the last 10 days | +5 (added on read, not stored) |
+| installed-app bonus: app launched from its icon within the last 10 whole days | +5 (added on read, not stored) |
 
-Every 2 hours without engagement the stored score is multiplied by 0.984: about −18 % a day, a half-life of about 3.6 days. A score below 0.5 is deleted, i.e. becomes 0.
+Every whole 2 hours since the last engagement multiply the stored score by 0.984 (about −18 % a day, a half-life of about 3.6 days); each new engagement commits the decay so far and restarts the count. Scores at or below 0.5 are deleted when Chrome next cleans up (shortly after it starts). If the browser isn't used *at all* for 9 h or more, Chrome shifts every site's last-engagement time so that at most 8 h of that gap decays (so a phone in a drawer doesn't lose its scores).
+
+Who gets the +5 launch bonus (`SetLastShortcutLaunchTime`):
+- **Android:** only a WebAPK launched from the home screen or app drawer. A notification click does open the installed app (Chrome routes in-scope URLs to it), but the launch is tagged as coming from a notification and earns no bonus. Manifest shortcuts and other intents don't count either.
+- **Desktop:** launching the app from the OS, and navigations Chrome captures into the app window ("open supported links").
 
 **What the score does to background refresh.** The interval is Chrome's minimum of 12 h times a penalty (the app's own `minInterval` of 6 h is overridden):
 
 | Engagement level | Score | Background refresh |
 |---|---|---|
-| none | 0 | suspended until the score rises again |
-| minimal | 0–1 | every 36 h |
-| low / medium | 1–50 | every 24 h |
+| none | 0 (deleted) | suspended until the score rises again |
+| minimal | above 0, below 1 | every 36 h |
+| low / medium | 1 to under 50 | every 24 h |
 | high / max | 50 and more | every 12 h |
 
-**In practice.** An app launched from its icon within the last 10 days has at least the +5 bonus, so it refreshes about once a day; reaching "high" takes near-maximum use every day, so assume 24 h. Not opened for more than 10 days, the bonus lapses and the score decays: a day of normal use is gone in roughly 2–3 weeks, after which Chrome stops waking the app. Arriving alerts keep re-booking the next 48 h regardless, so alerts stop only if both happen: weeks without opening the app and more than 48 h without any alert (e.g. a cloudy spell). Opening the app once restarts everything. The page can't read the score, so the app can't tell when Chrome has suspended refresh.
+**In practice.** An app launched from its icon within the last 10 days has at least the +5 bonus, so it refreshes about once a day; reaching "high" takes near-maximum use every day, so assume 24 h. Not opened for more than 10 days, the bonus lapses and the score decays: a day of normal use is gone in roughly 2–3 weeks, after which Chrome stops waking the app. Arriving alerts keep re-booking the next 48 h regardless, so without the reminder below, alerts would stop only if both happen: weeks without opening the app and more than 48 h without any alert (e.g. a cloudy spell). Opening the app once restarts everything.
 
 Hence the 48 h minimum booking window: a daily refresh renews it with a day to spare; a 24 h window would lapse after a single late refresh.
+
+### Keeping the score up: the "still interested?" reminder
+
+The page can't read the score, so the app estimates it (`js/core/engagement.js`) by replaying Chrome's formula above over the engagement it can see:
+
+| Recorded | Where | Counted as |
+|---|---|---|
+| taps and key presses, with Chrome's 10 s start delay and 10 s pause | page (`trackInput`) | +0.6 each |
+| click on any of the app's notifications | service worker, `notificationclick` | +1 |
+| launch from the app icon: `start_url` carries `?from=icon`, the page is in standalone mode | page, at load | the +5 bonus for 10 days |
+| first engagement of the day, daily cap, decay, deletion at 0.5 | model | as Chrome |
+
+It deliberately leaves out what it can't be sure Chrome counts: navigation points (which transition a launch or notification open gets isn't visible to the page), scrolling without a touch, media, and the 9 h inactivity rebase. So the estimate errs low, and a reminder may come early but not late. The estimate stays on the device in IndexedDB, under `engagement`.
+
+**The reminder.** On each scheduling run (app open, arriving alert, background refresh), if Chrome's background refresh is registered for the app, `plannedNudge()` finds when the estimated score would fall below 1 (from "low" to "minimal", where the refresh interval stretches to 36 h). It then books a notification for 19:00 local time on the last day before that: *"Still want ISS pass alerts? Tap to keep them coming…"*. It goes to the relay like any alert, encrypted, so the relay sees an ordinary `info` alert; the payload's `kind: 'nudge'` is only visible on the phone. It is booked at most 7 days ahead (the relay's limit is 8), and later runs push it out as engagement comes in.
+- **Tapped:** +1 point, plus +1.5 as the day's first engagement. The app opens on the Alerts tab and re-books, which moves the next reminder out.
+- **Ignored:** the service worker notes when a reminder arrived. Until some engagement is recorded after that, no further reminder is booked, so the app never nags. Chrome eventually pauses background refresh. Opening the app, or tapping any alert, starts the cycle again.
+- **Firefox, iPhone, or no background refresh registered:** no reminders; there is no engagement-gated refresh to keep alive.
+
+**How often**, if reminder taps were the only engagement: the first after 4 days, then every 6 days, with the score never below 1.15. Any app use or alert tap pushes them further out.
+
+**Verifying the estimate against Chrome.**
+- `npm test` covers the model alone: daily bonus and cap, decay steps, the launch bonus window, deletion, reminder timing and cadence.
+- `npm run test:engagement` (about 1.5 minutes) runs real Chromium on a throwaway profile. It reads Chrome's own stored score from the profile's `Preferences` file and compares it field by field with the model and with the app's stored estimate:
+  1. taps and key presses at set times: the app counts exactly the inputs Chrome counts;
+  2. the stored timestamps moved back a day: the decayed score `chrome://site-engagement` shows matches the model;
+  3. the next day's first tap: committed decay and the daily bonus agree;
+  4. a month later: Chrome has deleted the score, as the model predicts.
+- **On a phone**, for what can't be automated (notification clicks, launches from the icon): About → App status shows the estimate (Chromium only). Compare it with `chrome://site-engagement` in Chrome on the same phone; Chrome's number should be equal or higher (it also counts navigations).
 
 ## How it works
 
@@ -91,6 +124,7 @@ Verified against [Skyfield](https://rhodesmill.org/skyfield/) with the same TLE 
 ```
 js/core/   astro.js (sun, shadow, magnitude) · passes.js · weather.js (fetch + score) · tle.js
            alerts.js (schedule builder, shared by page + service worker) · push.js (device key, relay client) · store.js (IndexedDB)
+           engagement.js (estimate of Chrome's site engagement, "still interested?" reminder)
 js/ui/     map.js (Leaflet) · skychart.js (SVG polar plot)
 js/app.js  UI controller      sw.js  offline cache · push display · periodic re-sync · subscription renewal
 js/config.js                  relay URL (set by the Pages workflow)
@@ -143,6 +177,7 @@ npm install                    # also points git at .githooks/ (core.hooksPath)
 npx playwright install chromium
 npm test                       # unit tests: astronomy, pass prediction, scoring, alert schedule
 npm run test:e2e               # browser smoke test: boot, offline start, update to a new version
+npm run test:engagement        # the engagement estimate against real Chromium (not in the hook: 1.5 min)
 ```
 Before each commit the hook checks the version bump, that all JavaScript parses, runs the unit tests, the relay tests (when `worker/` changed) and the browser smoke test (if Playwright is installed; `SKIP_E2E=1` skips it). `git commit --no-verify` skips everything once.
 
@@ -156,7 +191,7 @@ npm run dev                    # http://localhost:8787; trigger the cron via /__
 Then set the relay URL in the app to `http://localhost:8787`. Real push needs a real browser push subscription, so test notifications on a phone against the deployed worker.
 
 ## Privacy
-Your location stays on the device. It is sent only to Open-Meteo (rounded to 0.01°) for the forecast and to BigDataCloud to look up a place name when you use GPS or long-press the map. The push relay stores your browser's push endpoint, a hash of its auth secret, and alert messages encrypted so that only your browser can read them. Delivered rows are deleted, and subscriptions that aren't refreshed for 30 days are deleted entirely.
+Your location stays on the device, and so does the app's estimate of how much you use it. The location is sent only to Open-Meteo (rounded to 0.01°) for the forecast and to BigDataCloud to look up a place name when you use GPS or long-press the map. The push relay stores your browser's push endpoint, a hash of its auth secret, and alert messages encrypted so that only your browser can read them. Delivered rows are deleted, and subscriptions that aren't refreshed for 30 days are deleted entirely.
 
 ## Credits
 satellite.js (MIT) · Leaflet (BSD-2) · NASA GIBS / Black Marble imagery · Open-Meteo (CC BY 4.0) · CelesTrak · Cloudflare Workers + D1
