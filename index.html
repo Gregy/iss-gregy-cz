@@ -33,6 +33,7 @@
           <div class="stat"><span class="k">Altitude</span><span class="v" id="sAlt">–</span></div>
           <div class="stat"><span class="k">Speed</span><span class="v" id="sSpd">–</span></div>
         </div>
+        <div id="pushWarn" class="card look warn" hidden></div>
         <div id="liveLook" class="card look"></div>
         <div id="nextPass"></div>
         <p class="fine" id="tleInfo"></p>
@@ -63,10 +64,11 @@
           <input type="range" id="minScore" min="0" max="90" step="5"></div>
         <div class="field"><label for="notifyFrom">Appears between <output id="notifyWindowOut"></output></label>
           <div class="dual" id="notifyWindow">
-            <input type="range" id="notifyFrom" min="0" max="1440" step="30" aria-label="Earliest time">
-            <input type="range" id="notifyTo" min="0" max="1440" step="30" aria-label="Latest time">
+            <input type="range" id="notifyFrom" min="0" max="1440" step="30" aria-label="From">
+            <input type="range" id="notifyTo" min="0" max="1440" step="30" aria-label="Until">
           </div>
-          <div class="scale" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div></div>
+          <div class="scale" aria-hidden="true"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+          <p class="hint">Cross the knobs for a window across midnight, such as 20:00 – 02:00.</p></div>
         <p class="hint" id="criteriaPreview"></p>
       </div>
 

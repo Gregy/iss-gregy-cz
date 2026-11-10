@@ -383,17 +383,23 @@ function paintRange(el) {
   el.style.setProperty('--b', (el.value - el.min) / (el.max - el.min));
 }
 
-/** Two knobs on one track; they may pass each other, the window is always the span between them. */
+/**
+ * Two knobs on one track: the window's start and its end. With the start past
+ * the end the window runs across midnight (22:00 – 02:00), and the track is
+ * filled outside the knobs instead of between them.
+ */
 function setupTimeWindow() {
   const a = $('#notifyFrom'), b = $('#notifyTo'), box = $('#notifyWindow'), out = $('#notifyWindowOut');
   a.value = state.settings.notifyFrom;
   b.value = state.settings.notifyTo;
-  const read = () => [Math.min(+a.value, +b.value), Math.max(+a.value, +b.value)];
+  const read = () => [+a.value, +b.value];
   const paint = () => {
     const [from, to] = read();
-    box.style.setProperty('--a', from / 1440);
-    box.style.setProperty('--b', to / 1440);
-    out.textContent = from === 0 && to === 1440 ? 'any time' : `${fmtHm(from)} – ${fmtHm(to)}`;
+    const overnight = from > to;
+    box.classList.toggle('overnight', overnight);
+    box.style.setProperty('--a', Math.min(from, to) / 1440);
+    box.style.setProperty('--b', Math.max(from, to) / 1440);
+    out.textContent = from === 0 && to === 1440 ? 'any time' : `${fmtHm(from)} – ${fmtHm(to)}${overnight ? ' (overnight)' : ''}`;
     return [from, to];
   };
   for (const el of [a, b]) {
@@ -518,6 +524,14 @@ async function renderAlertStatus() {
         ? 'Nothing to alert you about for months. Consider a lower minimum height or score.'
         : `No passes in the next ${BOOK_DAYS} days. A "season is back" notice comes a few hours before each of the next passes, and the first one that arrives books the alerts.`)
         : '';
+  // on the Live view, so a broken chain of alerts isn't only visible on the Alerts tab
+  const trouble = !s.pushEnabled ? ''
+    : perm !== 'granted' ? 'notifications are blocked for this site in the browser settings'
+      : !sub ? skipReason('not subscribed')
+        : last?.error ? last.error
+          : last?.skipped ? skipReason(last.skipped) : '';
+  $('#pushWarn').hidden = !trouble;
+  $('#pushWarn').innerHTML = trouble ? `<div><div class="big">🔕 Alerts are not being scheduled</div><div class="sub">${esc(trouble)}. <a href="#alerts">Alerts settings</a></div></div>` : '';
   // turning on needs a location; turning off always works
   $('#pushEnabled').disabled = !state.loc && !s.pushEnabled;
   $('#pushStatus').innerHTML = !s.pushEnabled

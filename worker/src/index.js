@@ -20,6 +20,14 @@ const STALE = 10 * 60e3; // alerts we could not deliver within 10 min are droppe
 // so delivery lands within ±30 s of the booked time. Uploads leave that window
 // alone: it belongs to the cron.
 const DUE_AHEAD = 30e3;
+// How long the push service keeps an alert for a phone it can't reach, counted
+// from the booked time (seconds). The phone says how long each alert stays
+// useful: a "look up now" alert until its pass ends, a "season is back" notice
+// for a day (its arrival is what re-books, so it should survive a phone that is
+// off for the night). The token's exp doesn't limit this: push services check
+// it only when the message is handed over.
+const DEFAULT_TTL = STALE / 1000;
+const MAX_TTL = 2 * 86400;
 // A sent alert blocks re-booking an alert of the same kind within this
 // distance, even under a different id (pass ids can shift by a minute).
 const SENT_GUARD = 3 * 60e3;
@@ -43,7 +51,7 @@ const PUSH_SERVICES = [
 ];
 
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, data) { super(message); this.status = status; this.data = data; }
 }
 
 function corsHeaders(req, env) {
@@ -110,8 +118,7 @@ async function ownedRow(env, ident) {
   return row;
 }
 
-async function ensureCapacity(env, row) {
-  if (row) return;
+async function ensureCapacity(env) {
   const { n } = await env.DB.prepare('SELECT COUNT(*) AS n FROM subscriptions').first();
   if (n >= intVar(env.MAX_SUBSCRIPTIONS, MAX_SUBSCRIPTIONS)) throw new HttpError(503, 'relay is full');
 }
@@ -157,7 +164,8 @@ function parseAlerts(alerts, endpoint, now) {
     seen.add(a.id);
     if (a.at <= now + DUE_AHEAD || a.at > now + MAX_AHEAD) continue;
     const msg = parseMessage(a, endpoint, a.at, `alert ${a.id}`);
-    out.push({ id: a.id, at: Math.round(a.at), kind: a.kind === 'lead' ? 'lead' : 'info', ...msg });
+    const ttl = Number.isFinite(a.ttl) ? Math.min(MAX_TTL, Math.max(60, Math.round(a.ttl))) : null;
+    out.push({ id: a.id, at: Math.round(a.at), kind: a.kind === 'lead' ? 'lead' : 'info', ttl, ...msg });
   }
   return out;
 }
@@ -198,22 +206,22 @@ async function handle(req, env) {
     const ident = await parseIdentity(body, env);
     let alerts = parseAlerts(body.alerts, ident.endpoint, now);
     const row = await ownedRow(env, ident);
-    await ensureCapacity(env, row);
-    if (row?.invalid) {
+    // Subscriptions are created by /api/send only, once a push to them succeeded:
+    // made-up endpoints can't take up room here.
+    if (!row) throw new HttpError(409, 'unknown subscription: send it a notification first', { unknown: true });
+    if (row.invalid) {
       // the push service rejected this device's VAPID signature; it must resubscribe
       await env.DB.batch([upsertSub(env, ident, now), env.DB.prepare('DELETE FROM alerts WHERE sub_id = ?').bind(ident.id)]);
       return { booked: 0, next: null, invalid: true };
     }
-    if (row) {
-      const { results: sent } = await env.DB.prepare('SELECT kind, at FROM sent WHERE sub_id = ?').bind(ident.id).all();
-      alerts = alerts.filter((a) => !sent.some((s) => s.kind === a.kind && Math.abs(s.at - a.at) < SENT_GUARD));
-    }
+    const { results: sent } = await env.DB.prepare('SELECT kind, at FROM sent WHERE sub_id = ?').bind(ident.id).all();
+    alerts = alerts.filter((a) => !sent.some((s) => s.kind === a.kind && Math.abs(s.at - a.at) < SENT_GUARD));
     // replace every future alert for this subscription in one transaction
     await env.DB.batch([
       upsertSub(env, ident, now),
       env.DB.prepare('DELETE FROM alerts WHERE sub_id = ? AND at > ?').bind(ident.id, now + DUE_AHEAD),
-      ...alerts.map((a) => env.DB.prepare('INSERT OR REPLACE INTO alerts (sub_id, alert_id, at, kind, authorization, body) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(ident.id, a.id, a.at, a.kind, a.authorization, a.body)),
+      ...alerts.map((a) => env.DB.prepare('INSERT OR REPLACE INTO alerts (sub_id, alert_id, at, kind, authorization, body, ttl) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(ident.id, a.id, a.at, a.kind, a.authorization, a.body, a.ttl)),
     ]);
     return { booked: alerts.length, next: alerts.length ? Math.min(...alerts.map((a) => a.at)) : null };
   }
@@ -225,7 +233,9 @@ async function handle(req, env) {
     return { deleted: true };
   }
 
-  // send one ready-made message now (the app's "Send test" button)
+  // Send one ready-made message now: the app's "Send test" button, and the
+  // notification that confirms alerts are on. A push that the push service
+  // accepts is also what registers a subscription here.
   if (req.method === 'POST' && pathname === '/api/send') {
     await rateLimit(req, env);
     const body = await readJson(req);
@@ -233,17 +243,21 @@ async function handle(req, env) {
     const ident = await parseIdentity(body, env);
     const msg = parseMessage(body.message, ident.endpoint, now, 'message');
     const row = await ownedRow(env, ident);
-    await ensureCapacity(env, row);
-    await upsertSub(env, ident, now).run();
-    // check-and-set in one statement so concurrent requests can't both pass
-    const ok = await env.DB.prepare('UPDATE subscriptions SET last_test = ?1 WHERE id = ?2 AND (last_test IS NULL OR last_test < ?3) RETURNING id')
-      .bind(now, ident.id, now - TEST_INTERVAL).first();
-    if (!ok) throw new HttpError(429, 'slow down');
-    const res = await push(ident.endpoint, msg, 300);
-    if (res.status === 404 || res.status === 410) await forgetSubscription(env, ident.id);
+    if (row) {
+      // check-and-set in one statement so concurrent requests can't both pass
+      const ok = await env.DB.prepare('UPDATE subscriptions SET last_test = ?1 WHERE id = ?2 AND (last_test IS NULL OR last_test < ?3) RETURNING id')
+        .bind(now, ident.id, now - TEST_INTERVAL).first();
+      if (!ok) throw new HttpError(429, 'slow down');
+    } else {
+      await ensureCapacity(env);
+    }
+    const res = await push(ident.endpoint, msg, 300).catch((e) => { throw new HttpError(504, `push service did not answer (${e.name})`); });
+    if (row && (res.status === 404 || res.status === 410)) await forgetSubscription(env, ident.id);
     if (!res.ok) throw new HttpError(502, `push service responded ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    // a working test proves the device key is accepted again
-    await env.DB.prepare('UPDATE subscriptions SET invalid = 0 WHERE id = ?').bind(ident.id).run();
+    // The push service accepted it: the subscription is real (so it is stored
+    // from now on) and its device key works (again).
+    await env.DB.prepare(`INSERT INTO subscriptions (id, endpoint, owner, updated) VALUES (?1, ?2, ?3, ?4)
+      ON CONFLICT(id) DO UPDATE SET updated = ?4, invalid = 0`).bind(ident.id, ident.endpoint, ident.owner, now).run();
     return { sent: true };
   }
 
@@ -268,7 +282,7 @@ export async function sendDue(env, now = Date.now()) {
     env.DB.prepare(`INSERT OR REPLACE INTO sent (sub_id, alert_id, kind, at, sent_at)
       SELECT a.sub_id, a.alert_id, a.kind, a.at, ?4 FROM alerts a WHERE (a.sub_id, a.alert_id) IN (${DUE})`).bind(...args, now),
     env.DB.prepare(`DELETE FROM alerts WHERE (sub_id, alert_id) IN (${DUE})
-      RETURNING sub_id, alert_id, at, kind, authorization, body, attempts`).bind(...args),
+      RETURNING sub_id, alert_id, at, kind, authorization, body, attempts, ttl`).bind(...args),
   ]);
   const rows = claim.results;
   if (!rows.length) return stats;
@@ -285,7 +299,7 @@ export async function sendDue(env, now = Date.now()) {
     if (!endpoint || now - r.at > STALE) { stats.dropped++; return; }
     let res;
     try {
-      res = await push(endpoint, r, Math.max(60, Math.round((STALE - Math.max(0, now - r.at)) / 1000)));
+      res = await push(endpoint, r, Math.max(60, Math.round((r.ttl ?? DEFAULT_TTL) - Math.max(0, now - r.at) / 1000)));
     } catch (e) {
       // network error or timeout: the push service may already have it, so
       // don't retry (at-most-once); only an explicit 429/5xx answer is retried
@@ -304,8 +318,8 @@ export async function sendDue(env, now = Date.now()) {
   for (const r of retry) {
     if (gone.has(r.sub_id) || invalid.has(r.sub_id)) continue;
     // OR IGNORE: if the app re-uploaded this alert meanwhile, its version wins
-    stmts.push(env.DB.prepare('INSERT OR IGNORE INTO alerts (sub_id, alert_id, at, kind, authorization, body, attempts) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(r.sub_id, r.alert_id, r.at, r.kind, r.authorization, r.body, r.attempts + 1));
+    stmts.push(env.DB.prepare('INSERT OR IGNORE INTO alerts (sub_id, alert_id, at, kind, authorization, body, attempts, ttl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(r.sub_id, r.alert_id, r.at, r.kind, r.authorization, r.body, r.attempts + 1, r.ttl));
     stmts.push(env.DB.prepare('DELETE FROM sent WHERE sub_id = ? AND alert_id = ?').bind(r.sub_id, r.alert_id));
   }
   for (const id of invalid) {
@@ -340,7 +354,7 @@ export default {
     } catch (e) {
       const status = e instanceof HttpError ? e.status : 500;
       if (status === 500) console.error(e);
-      return json({ error: e.message || 'error' }, status, cors);
+      return json({ error: e.message || 'error', ...(e instanceof HttpError ? e.data : null) }, status, cors);
     }
   },
 

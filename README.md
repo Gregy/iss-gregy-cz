@@ -31,13 +31,15 @@ for each alert:
 - **The relay holds no secrets and can't read anything.** Each device generates its own VAPID key pair; the private key is a non-extractable WebCrypto key in IndexedDB. Notifications are end-to-end encrypted to the browser. The relay never sees a location.
 - **Pre-signed tokens work** because push services only require a VAPID token's `exp` to be at most 24 h after the moment it is *sent*. A token prepared weeks ahead is valid when the relay sends it at the alert time.
 - Every sync uploads the **complete** list, so a pass that clouds over is cancelled exactly; nothing is sent.
-- **At-most-once delivery:** the cron claims rows before sending. A crash, timeout or overlapping run can lose an alert, never duplicate it. Only explicit 429/5xx answers are retried. Alerts more than 10 minutes late are dropped.
+- **At-most-once delivery:** the cron claims rows before sending. A crash, timeout or overlapping run can lose an alert, never duplicate it. Only explicit 429/5xx answers are retried. Alerts the relay couldn't hand over within 10 minutes are dropped.
+- **A phone that is off or offline** gets the alert when it comes back, for as long as it is useful: each alert carries a TTL for the push service. A "look up now" alert is kept until its pass ends (and then says how many minutes are really left), a "season is back" notice for a day.
 - Delivery is within ±30 s of the booked time.
 - The schedule is re-synced whenever the app is opened and whenever an alert arrives (the service worker is awake anyway). Nothing else runs in the background; see below.
 - A "look up now" alert carries its pass's times and score factors. On arrival the service worker fetches a fresh forecast (4 s at most) and re-scores the pass: if it has dropped below your minimum score the notification says the clouds moved in, otherwise it adds the latest cloud cover. It can't be suppressed: browsers require every push to show a notification, which also rules out silent "wake up and refresh" pushes.
 
 **Multiple users.** Each browser subscription is one user, with no accounts. Rows are keyed by subscription, so one user's uploads can never touch another's. The subscription's `auth` secret acts as its password: only its hash is stored, and changes need the same secret. The relay protects itself with:
 - only POSTing to known push services (FCM, Mozilla, Apple, Windows);
+- storing a subscription only once the push service has accepted a notification for it. Turning alerts on sends an "ISS alerts are on" notification through the relay, and that is what registers the device; an upload for a subscription the relay doesn't know is refused (409) and the app sends that notification first. Made-up endpoints therefore can't use up the subscription cap;
 - a per-IP rate limit on writes;
 - a cap on total subscriptions (`MAX_SUBSCRIPTIONS`);
 - per-subscription limits (60 alerts, 4 KB each);
@@ -51,7 +53,7 @@ The only moments the phone can re-book are when the app is opened and when one o
 - **Fewer than 5 matching passes in 14 days** (the ISS has stretches of 2–6 weeks without visible passes, longer in summer at high latitudes): passes are predicted 120 days ahead, and a **"season is back"** notice is booked 3 hours before each of the next matching passes after the 14 days (moved into 08:00–21:00), so that at least 5 notifications are booked in all. Every arrival re-books, so a notice only fires when all notifications before it were missed, or there were none. Predictions that far out are only good to the day, which is all a notice needs. On arrival it is rewritten from a fresh prediction ("Did you miss it? 4 passes worth watching in the next 7 days, the first tonight at 18:34") and re-books everything, which replaces the remaining notices with ordinary alerts. Five chances make it unlikely that a phone that is off or offline misses them all.
 - **Nothing matches between day 14 and day 120** (e.g. a minimum height the ISS never reaches from that latitude): one notice near the end of that period, to look again.
 
-What can still break the chain: a device that is off or offline whenever its notifications are due. Opening the app once restarts it. The relay keeps a subscription for as long as it has alerts booked, and for 30 days after the last.
+What can still break the chain: a device that stays off or offline for longer than its notifications are kept (see above). Opening the app once restarts it. If the browser has dropped the push subscription, the next sync subscribes again by itself, and when scheduling fails the Live view says so. The relay keeps a subscription for as long as it has alerts booked, and for 30 days after the last.
 
 **Why there is no background refresh.** We tried keeping the schedule fresh with Periodic Background Sync and dropped it. It exists only in Chromium, only for installed apps, and Chrome runs it at most daily, less often for less-used sites, and not at all once the site engagement score decays to zero, which a notification-only app reaches within weeks. On Android it also needs a WebAPK, which only Chrome mints (not Brave, nor Firefox, which lacks the API). iPhones have neither the API nor silent pushes. Keeping engagement up would have meant regular "still interested?" notifications, and covering Brave a separate Android app (TWA). Booking further ahead works the same in every browser.
 
@@ -107,7 +109,7 @@ To deploy automatically on push instead, add repo secrets `CLOUDFLARE_API_TOKEN`
 All paths are relative, so the app works under `https://<user>.github.io/<repo>/`. The About tab's GitHub and sponsor buttons appear once `GITHUB_URL` / `SPONSOR_URL` are set in `js/config.js`.
 
 ### Install on Android
-Open the site in Chrome, then **⋮ → Add to Home screen / Install app**, or use the *Install app* button in the Alerts tab. In Alerts, set your criteria, turn on **Push notifications**, and tap **Send test**. Installing isn't needed for push on Android. On iPhone it is: Safari → Share → **Add to Home Screen**, then turn notifications on in the app opened from there.
+Open the site in Chrome, then **⋮ → Add to Home screen / Install app**, or use the *Install app* button in the Alerts tab. In Alerts, set your criteria (by default passes that appear between 06:00 and midnight; cross the two knobs for a window across midnight), turn on **Push notifications**, and tap **Send test**. Installing isn't needed for push on Android. On iPhone it is: Safari → Share → **Add to Home Screen**, then turn notifications on in the app opened from there.
 
 ## Local development
 

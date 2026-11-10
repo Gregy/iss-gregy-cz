@@ -27,13 +27,15 @@ const DEVICE_VERIFY = crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x
 const receivers = new Map(); // name -> { ecdh, auth }
 const deliveries = [];
 const hits = { gone: [], forbidden: [], slow: [] };
+let armed = false; // the gone/forbidden/slow endpoints behave until armed, so they can be registered first
 const push = http.createServer((req, res) => {
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', async () => {
     const [, kind, name] = req.url.split('/');
-    if (kind === 'gone') { hits.gone.push(name); res.writeHead(410).end(); return; }
-    if (kind === 'forbidden') { hits.forbidden.push(name); res.writeHead(403).end(); return; }
+    if (kind === 'dead') { res.writeHead(404).end(); return; }
+    if (kind === 'gone' && armed) { hits.gone.push(name); res.writeHead(410).end(); return; }
+    if (kind === 'forbidden' && armed) { hits.forbidden.push(name); res.writeHead(403).end(); return; }
     try {
       const m = req.headers.authorization.match(/^vapid t=([\w-]+)\.([\w-]+)\.([\w-]+), k=([\w-]+)$/);
       assert.ok(m, 'vapid header');
@@ -47,8 +49,8 @@ const push = http.createServer((req, res) => {
       assert.ok(Number(req.headers.ttl) >= 60);
       const r = receivers.get(name);
       const plain = ece.decrypt(Buffer.concat(chunks), { version: 'aes128gcm', privateKey: r.ecdh, authSecret: r.auth });
-      deliveries.push({ name, payload: JSON.parse(plain.toString()), t: Date.now() });
-      if (kind === 'slow') { hits.slow.push(name); await sleep(15e3); }
+      deliveries.push({ name, payload: JSON.parse(plain.toString()), t: Date.now(), ttl: Number(req.headers.ttl) });
+      if (kind === 'slow' && armed) { hits.slow.push(name); await sleep(15e3); }
       res.writeHead(201).end();
     } catch (e) {
       console.error('mock push rejected:', e.message);
@@ -67,9 +69,9 @@ function subscription(name, kind = 'push') {
 }
 
 /** Build an alert the way the phone does: encrypted payload + device-signed token. */
-async function alert(sub, id, at, title = id, kind = 'lead') {
+async function alert(sub, id, at, title = id, kind = 'lead', ttl) {
   const payload = JSON.stringify({ title, body: `body ${id}`, tag: id, url: 'https://example.github.io/#x', kind });
-  return { id, at, kind, ...(await prepareMessage(sub, payload, DEVICE, { exp: Math.floor(at / 1000) + 3600, subject: 'mailto:test@example.com' })) };
+  return { id, at, kind, ttl, ...(await prepareMessage(sub, payload, DEVICE, { exp: Math.floor(at / 1000) + 3600, subject: 'mailto:test@example.com' })) };
 }
 
 // --- worker ---
@@ -90,8 +92,13 @@ const api = async (method, path, body, { origin = ORIGIN, ip = `10.0.0.${++ipCou
 };
 const id = (sub) => ({ endpoint: sub.endpoint, owner: sub.keys.auth });
 const book = async (sub, alerts) => api('PUT', '/api/schedule', { ...id(sub), alerts: await Promise.all(alerts) });
+/** What the app does first: a notification through /api/send, which registers the subscription. */
+const hello = async (sub) => {
+  const message = await prepareMessage(sub, JSON.stringify({ title: 'hello', body: '', tag: 'hello', url: '', kind: 'info' }), DEVICE, { exp: Math.floor(Date.now() / 1000) + 3600, subject: 'mailto:t@example.com' });
+  return api('POST', '/api/send', { ...id(sub), message });
+};
 const cron = async (wait = 1500) => { await fetch(`${W}/__scheduled?cron=*+*+*+*+*`); await sleep(wait); };
-const count = (name) => deliveries.filter((d) => d.name === name).length;
+const count = (name) => deliveries.filter((d) => d.name === name && d.payload.tag !== 'hello').length;
 
 let failed = false;
 const step = async (name, fn) => {
@@ -115,6 +122,19 @@ try {
 
   const A = subscription('A'), B = subscription('B'), C = subscription('C'), G = subscription('G', 'gone');
   const F = subscription('F', 'forbidden'), S = subscription('S', 'slow'), X = subscription('X'), N = subscription('N');
+
+  await step('a subscription exists only once a push to it succeeded', async () => {
+    assert.equal((await book(A, [])).status, 409);
+    assert.equal((await book(A, [])).body.unknown, true);
+    const D = subscription('D', 'dead');
+    assert.equal((await hello(D)).status, 502, 'the push service does not know this endpoint');
+    assert.equal((await book(D, [])).status, 409, 'so it was not stored');
+    for (const sub of [A, B, C, G, F, S, X, N]) assert.equal((await hello(sub)).status, 200);
+    assert.equal(deliveries.filter((d) => d.payload.tag === 'hello').length, 8);
+    assert.equal((await book(A, [])).status, 200);
+  });
+  armed = true;
+
   const t0 = Date.now();
   const due = t0 + 33e3; // just outside the 30 s cron window now; inside it after a short wait
 
@@ -135,7 +155,7 @@ try {
   await book(B, [alert(B, 'b1', due)]);
   await book(B, []); // cancelled
   await book(C, [alert(C, 'c1', due, 'old text')]);
-  await book(C, [alert(C, 'c1', due, 'new text')]); // replaced
+  await book(C, [alert(C, 'c1', due, 'new text', 'info', 86400)]); // replaced; kept for a day
   await book(G, [alert(G, 'g1', due), alert(G, 'g2', due + 1000)]);
   await book(F, [alert(F, 'f1', due)]);
   await book(S, [alert(S, 's1', due)]);
@@ -153,14 +173,17 @@ try {
 
   await step('due alert delivered exactly once, decrypted and VAPID-verified', async () => {
     assert.equal(count('A'), 1);
-    const d = deliveries.find((x) => x.name === 'A');
+    const d = deliveries.find((x) => x.name === 'A' && x.payload.tag === 'a1');
+    assert.ok(d.ttl > 500 && d.ttl <= 600, `no ttl given: 10 minutes from the booked time, got ${d.ttl}`);
     assert.deepEqual(d.payload, { title: 'a1', body: 'body a1', tag: 'a1', url: 'https://example.github.io/#x', kind: 'lead' });
     assert.ok(Math.abs(d.t - due) <= 31e3, 'within ±30 s of booked time');
   });
   await step('cancelled alert not delivered', async () => assert.equal(count('B'), 0));
   await step('replaced alert delivered with the new text only', async () => {
     assert.equal(count('C'), 1);
-    assert.equal(deliveries.find((x) => x.name === 'C').payload.title, 'new text');
+    const d = deliveries.find((x) => x.name === 'C' && x.payload.tag === 'c1');
+    assert.equal(d.payload.title, 'new text');
+    assert.ok(d.ttl > 86300 && d.ttl <= 86400, `ttl as booked, got ${d.ttl}`);
   });
   await step('slow push service + overlapping cron runs: no duplicate', async () => {
     assert.equal(hits.slow.length, 1, `slow endpoint hit ${hits.slow.length}×`);
@@ -200,8 +223,9 @@ try {
 
   await step('DELETE removes the subscription', async () => {
     assert.equal((await api('DELETE', '/api/schedule', id(A))).status, 200);
-    const r = await book(A, []);
-    assert.equal(r.status, 200, 're-creating works');
+    assert.equal((await book(A, [])).status, 409, 'gone');
+    assert.equal((await hello(A)).status, 200);
+    assert.equal((await book(A, [])).status, 200, 're-creating works');
   });
 } catch (e) {
   failed = true;

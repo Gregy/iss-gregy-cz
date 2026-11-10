@@ -24,6 +24,10 @@ export const WEATHER_HOURS = 48; // beyond this the cloud forecast is too uncert
 export const LOOKAHEAD_DAYS = 120; // how far to look for the next passes after a long stretch without any
 export const SEASON_PASSES = 5; // at least this many booked chances to re-book, in case the phone misses some
 const SEASON_LEAD = 3 * 3600e3; // a season notice comes this long before its pass
+// How long the push service keeps a season notice for a phone it can't reach (s).
+// Its arrival is what re-books, so it should outlast a night with the phone off.
+// A "look up now" alert is kept until its pass ends.
+const SEASON_TTL = 86400;
 const RESYNC_UNCHANGED = 6 * 3600e3; // re-upload an unchanged schedule after this long (keeps the relay subscription fresh)
 
 export async function loadWeather(loc, { maxAge = WEATHER_MAX_AGE } = {}) {
@@ -61,6 +65,12 @@ export function localMinutes(t, tz) {
 }
 
 /**
+ * Is minute-of-day `m` inside the window `from`–`to` (inclusive)? A window
+ * whose start is later than its end runs across midnight: 22:00–02:00.
+ */
+export const inWindow = (m, from, to) => (from <= to ? m >= from && m <= to : m >= from || m <= to);
+
+/**
  * Does a pass meet the alert criteria? `tz` is the location's time zone, for
  * the time-of-day window. Within WEATHER_HOURS of `now` the score includes the
  * cloud forecast; further out it is the clear-sky score, since a forecast that
@@ -70,8 +80,7 @@ export function qualifies(p, s, tz, now = Date.now()) {
   const r = p.rating;
   if (!p.visible || !r) return false;
   if (p.visible.max.el < s.minElevation) return false;
-  const appears = localMinutes(p.visible.start.t, tz);
-  if (appears < s.notifyFrom || appears > s.notifyTo) return false;
+  if (!inWindow(localMinutes(p.visible.start.t, tz), s.notifyFrom, s.notifyTo)) return false;
   const score = p.visible.start.t - now <= WEATHER_HOURS * 3600e3 ? r.score : r.geo;
   return score >= s.minScore;
 }
@@ -123,7 +132,7 @@ const dayPhrase = (t, tz, now) => {
 };
 
 const seasonNotice = (baseUrl, at, id, body) => ({
-  id, at, kind: 'season', tag: 'season', url: `${baseUrl}#passes`, title: '🛰️ ISS season is back', body,
+  id, at, ttl: SEASON_TTL, kind: 'season', tag: 'season', url: `${baseUrl}#passes`, title: '🛰️ ISS season is back', body,
 });
 
 /**
@@ -148,7 +157,7 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
     const f = p.rating.factors;
     const check = { t: [v.start.t, v.max.t, v.end.t], geo: f.brightness * f.darkSky * f.duration, score: p.rating.score };
     out.push({
-      id: `${p.id}-lead`, at, kind: 'lead', tag: p.id, url: `${baseUrl}#pass=${p.id}`,
+      id: `${p.id}-lead`, at, ttl: Math.round((v.end.t - at) / 1000), kind: 'lead', tag: p.id, url: `${baseUrl}#pass=${p.id}`,
       title: `🛰️ ISS in ${settings.leadMinutes} min, look ${compass(v.start.az)}`, body: `${d.path}\n${d.stats}`, check,
     });
   }
@@ -170,6 +179,19 @@ export function buildSchedule(passes, settings, loc, baseUrl, now = Date.now()) 
 // ---------- at delivery ----------
 
 const FRESH_WEATHER_TIMEOUT = 4000; // a "look up now" alert must not wait longer for the forecast
+
+/**
+ * A "look up now" alert that arrives late (the phone was off or offline; the
+ * push service keeps it until the pass ends) says how long is really left.
+ * Pure, so it can be tested.
+ */
+export function leadAlertTiming(d, now) {
+  const booked = d.title?.match(/ISS in (\d+) min/);
+  if (!booked || !d.check?.t) return d;
+  const left = Math.round((d.check.t[0] - now) / 60e3);
+  if (Number(booked[1]) - left < 2) return d;
+  return { ...d, title: d.title.replace(booked[0], left >= 1 ? `ISS in ${left} min` : 'ISS visible now') };
+}
 
 /**
  * A "look up now" alert re-scored against `wx`, the latest forecast for its
@@ -232,7 +254,7 @@ async function freshenSeasonAlert(d) {
 
 /** An arriving notification brought up to date before it is shown; as booked if that fails. */
 export function freshenAlert(d) {
-  if (d.kind === 'lead') return freshenLeadAlert(d);
+  if (d.kind === 'lead') return freshenLeadAlert(leadAlertTiming(d, Date.now()));
   if (d.kind === 'season') return freshenSeasonAlert(d);
   return Promise.resolve(d);
 }
@@ -259,6 +281,22 @@ export async function syncPush(opts) {
   return syncLocked(opts);
 }
 
+const RESUBSCRIBE_TIMEOUT = 15e3;
+
+/** A new push subscription, if the browser still allows notifications; null otherwise. */
+async function resubscribe(registration) {
+  try {
+    const permission = await registration.pushManager.permissionState({ userVisibleOnly: true });
+    if (permission !== 'granted') return null;
+    // never hang here: the caller holds the sync lock
+    const timeout = new Promise((resolve) => setTimeout(resolve, RESUBSCRIBE_TIMEOUT, null));
+    return await Promise.race([subscribe(registration), timeout]);
+  } catch (e) {
+    console.warn('subscribing again failed', e);
+    return null;
+  }
+}
+
 async function syncLocked({ source, registration, baseUrl, now = Date.now(), force = false, weatherMaxAge }) {
   const settings = await store.getSettings();
   const loc = await store.get('location');
@@ -267,7 +305,13 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
   if (!settings.pushEnabled) return { skipped: 'push off' };
   if (!loc) return skip('no location');
   let sub = await registration.pushManager.getSubscription();
-  if (!sub) return skip('not subscribed');
+  if (!sub) {
+    // the browser dropped the subscription (it expired, or site data was cleared):
+    // notifications are still wanted and permitted, so subscribe again
+    sub = await resubscribe(registration);
+    if (!sub) return skip('not subscribed');
+    await store.log(source, 'this device was no longer subscribed to notifications; set it up again');
+  }
 
   try {
     const { passes, weather, tle, observer } = await computeForecast(loc, { hours: BOOK_DAYS * 24 + 1, from: now, weatherMaxAge });
@@ -293,13 +337,13 @@ async function syncLocked({ source, registration, baseUrl, now = Date.now(), for
       await store.set('lastCheck', { t: now, source, ...state, unchanged: true });
       return { ...state, unchanged: true };
     }
-    let r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
+    let r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl), baseUrl, source === 'enabled');
     if (r.invalid) {
       // the push service rejected this device's signature (e.g. the key was lost
       // while the subscription survived): start over with a fresh subscription
       await sub.unsubscribe();
       sub = await subscribe(registration);
-      r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl));
+      r = await uploadSchedule(sub, await prepareAlerts(sub, alerts, baseUrl), baseUrl);
       await store.log(source, 'the push service no longer accepted this device; set it up again');
     }
     await store.set('push', { t: now, digest: PUSH_SERVER + sub.endpoint + JSON.stringify(alerts) });

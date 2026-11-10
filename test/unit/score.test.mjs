@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scorePass, scoreLabel, passWeather, clearSkyFactor } from '../../js/core/weather.js';
-import { qualifies, buildSchedule, leadAlertUpdate, seasonAlertUpdate, localMinutes, daytime, fmtTime, BOOK_DAYS, SEASON_PASSES } from '../../js/core/alerts.js';
+import { qualifies, inWindow, buildSchedule, leadAlertUpdate, leadAlertTiming, seasonAlertUpdate, localMinutes, daytime, fmtTime, BOOK_DAYS, SEASON_PASSES } from '../../js/core/alerts.js';
 
 // hourly forecast with the same cloud cover all day
 const forecast = (cloudPct, from = Date.parse('2026-11-01T00:00:00Z')) => {
@@ -75,6 +75,7 @@ test('buildSchedule: a "look up now" alert for every matching pass of the next 1
   assert.ok(alerts.every((a) => a.kind === 'lead'));
   assert.equal(alerts[0].at, ps[0].visible.start.t - 10 * 60e3);
   assert.equal(alerts[0].url, 'https://example.org/#pass=d1');
+  assert.equal(alerts[0].ttl, 10 * 60 + 300, 'kept by the push service until the pass ends');
   // past alert times are not booked
   assert.equal(buildSchedule([ps[0]], settings, LOC, 'https://example.org/', ps[0].visible.start.t - 5 * 60e3).filter((a) => a.kind === 'lead').length, 0);
 });
@@ -95,6 +96,7 @@ test('buildSchedule: after a long stretch without passes, season notices before 
   assert.ok(alerts.every((a) => a.kind === 'season' && a.tag === 'season'));
   assert.deepEqual(alerts.map((a) => a.id), ['d20-season', 'd21-season', 'd23-season', 'd24-season', 'd26-season']);
   assert.equal(alerts[0].at, ps[0].visible.start.t - 3 * 3600e3, '15:00, three hours before the 18:00 pass');
+  assert.ok(alerts.every((a) => a.ttl === 86400), 'kept for a day: a notice must survive a phone that is off for the night');
   assert.ok(alerts[0].body.startsWith(`Visible passes are back, the first tonight around ${fmtTime(ps[0].visible.start.t, LOC.tz)}.`), alerts[0].body);
 });
 
@@ -162,6 +164,17 @@ test('lead alert re-checked at delivery: clouded over vs still clear', () => {
   assert.ok(cloudy.body.endsWith(lead.body), 'keeps the pass details');
 });
 
+test('lead alert that arrives late says how long is really left', () => {
+  const start = T0;
+  const d = { kind: 'lead', title: '🛰️ ISS in 15 min, look W', body: 'b', check: { t: [start, start + 150e3, start + 300e3], geo: 1, score: 100 } };
+  assert.equal(leadAlertTiming(d, start - 15 * 60e3), d, 'on time: as booked');
+  assert.equal(leadAlertTiming(d, start - 14 * 60e3 - 20e3), d, 'a minute late is not worth a rewrite');
+  assert.equal(leadAlertTiming(d, start - 4 * 60e3).title, '🛰️ ISS in 4 min, look W');
+  assert.equal(leadAlertTiming(d, start + 60e3).title, '🛰️ ISS visible now, look W');
+  // and the cloud re-check still recognises the rewritten title
+  assert.match(leadAlertUpdate(leadAlertTiming(d, start - 4 * 60e3), passWeather(forecast(90), d.check.t), 30).title, /^☁️ ISS in 4 min, look W, but 90% cloud now$/);
+});
+
 test('local time of day in the location\'s time zone', () => {
   const t = Date.parse('2026-11-01T17:00:00Z'); // winter time: UTC+1 in Prague
   assert.equal(localMinutes(t, 'Europe/Prague'), 18 * 60);
@@ -173,11 +186,20 @@ test('qualifies: time-of-day window on when the pass appears', () => {
   const p = pass({ start: Date.parse('2026-11-01T04:30:00Z') }); // 05:30 in Prague
   p.rating = scorePass(p, null);
   const window = (from, to) => qualifies(p, { ...settings, notifyFrom: from, notifyTo: to }, 'Europe/Prague');
-  assert.ok(!window(360, 1320), '05:30 is outside the default 06:00-22:00');
+  assert.ok(!window(360, 1440), '05:30 is outside the default 06:00-24:00');
   assert.ok(window(300, 1320), 'inside 05:00-22:00');
   assert.ok(window(330, 330), 'window edges are inclusive');
   assert.ok(window(0, 1440), 'any time');
+  assert.ok(window(1200, 360), 'inside 20:00-06:00, a window across midnight');
+  assert.ok(!window(1200, 300), 'outside 20:00-05:00');
   assert.ok(qualifies(p, { ...settings, notifyFrom: 360, notifyTo: 1320 }, 'Asia/Tokyo'), '13:30 in Tokyo: same pass, other time zone');
+});
+
+test('time window: start after end runs across midnight', () => {
+  assert.ok(inWindow(23 * 60, 22 * 60, 2 * 60) && inWindow(60, 22 * 60, 2 * 60) && inWindow(0, 22 * 60, 2 * 60));
+  assert.ok(inWindow(22 * 60, 22 * 60, 2 * 60) && inWindow(2 * 60, 22 * 60, 2 * 60), 'edges are inclusive');
+  assert.ok(!inWindow(12 * 60, 22 * 60, 2 * 60) && !inWindow(21 * 60 + 59, 22 * 60, 2 * 60) && !inWindow(2 * 60 + 1, 22 * 60, 2 * 60));
+  assert.ok(inWindow(23 * 60 + 59, 360, 1440) && !inWindow(5 * 60, 360, 1440), 'the default, 06:00 to midnight');
 });
 
 test('buildSchedule leaves out passes outside the time window', () => {

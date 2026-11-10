@@ -31,8 +31,8 @@ export const del = (key) => tx('readwrite', (s) => s.delete(key));
 export const DEFAULT_SETTINGS = {
   minElevation: 25, // degrees
   minScore: 30,
-  notifyFrom: 360, // only passes appearing between these times of day (minutes, location's time zone)
-  notifyTo: 1320,
+  notifyFrom: 360, // only passes appearing between these times of day (minutes, location's time zone):
+  notifyTo: 1440, // 06:00 to midnight; a start later than the end is a window across midnight
   leadMinutes: 15,
   pushEnabled: false,
 };

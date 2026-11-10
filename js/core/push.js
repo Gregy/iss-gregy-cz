@@ -15,7 +15,7 @@ async function call(method, path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `relay HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `relay HTTP ${res.status}`), { data });
   return data;
 }
 
@@ -64,6 +64,7 @@ export async function prepareAlerts(sub, alerts, baseUrl) {
     id: a.id,
     at: a.at,
     kind: a.kind,
+    ttl: a.ttl,
     ...(await prepareMessage(json, JSON.stringify({ title: a.title, body: a.body, tag: a.tag, url: a.url, kind: a.kind, check: a.check }), key, {
       exp: Math.floor(a.at / 1000) + TOKEN_LIFETIME,
       subject: subject(baseUrl),
@@ -71,16 +72,34 @@ export async function prepareAlerts(sub, alerts, baseUrl) {
   })));
 }
 
-/** Replace every future alert for this subscription. */
-export const uploadSchedule = (sub, prepared) =>
-  call('PUT', '/api/schedule', { ...identity(sub.toJSON()), alerts: prepared });
+/**
+ * Replace every future alert for this subscription. The relay only stores
+ * subscriptions it has delivered a notification to (so made-up ones can't fill
+ * it up): one it doesn't know yet gets a notification first. `firstTime`: the
+ * user has just turned notifications on.
+ */
+export async function uploadSchedule(sub, prepared, baseUrl, firstTime = false) {
+  const put = () => call('PUT', '/api/schedule', { ...identity(sub.toJSON()), alerts: prepared });
+  try {
+    return await put();
+  } catch (e) {
+    if (!e.data?.unknown) throw e;
+    await sendNow(sub, baseUrl, firstTime
+      ? { title: '🛰️ ISS alerts are on', body: 'You will get a notification like this one before each good pass.', tag: 'hello' }
+      : { title: '🛰️ ISS alerts are set up again', body: 'This device was registered for notifications again. Your alerts are booked.', tag: 'hello' });
+    return put();
+  }
+}
 
-export async function sendTest(sub, baseUrl) {
+/** Send one notification to this subscription right away. */
+async function sendNow(sub, baseUrl, { title, body, tag }) {
   const json = sub.toJSON();
-  const payload = JSON.stringify({ title: 'ISS Pass Tracker test notification', body: 'Test notification', tag: 'test', url: baseUrl, kind: 'info' });
+  const payload = JSON.stringify({ title, body, tag, url: baseUrl, kind: 'info' });
   const message = await prepareMessage(json, payload, await deviceKey(), { exp: Math.floor(Date.now() / 1000) + TOKEN_LIFETIME, subject: subject(baseUrl) });
   return call('POST', '/api/send', { ...identity(json), message });
 }
+
+export const sendTest = (sub, baseUrl) => sendNow(sub, baseUrl, { title: 'ISS Pass Tracker test notification', body: 'Test notification', tag: 'test' });
 
 /**
  * Remove a subscription's bookings from the relay. If the relay can't be

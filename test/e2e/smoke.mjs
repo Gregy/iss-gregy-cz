@@ -100,24 +100,25 @@ await step('visible passes listed with scores', async () => {
 await step('alerts settings bound to their defaults', async () => {
   await page.goto(origin + '/#alerts');
   const v = await page.evaluate(() => ['minElevation', 'minScore', 'notifyFrom', 'notifyTo', 'leadMinutes'].map((id) => document.getElementById(id).value));
-  expect(JSON.stringify(v) === JSON.stringify(['25', '30', '360', '1320', '15']), `settings: ${v}`);
+  expect(JSON.stringify(v) === JSON.stringify(['25', '30', '360', '1440', '15']), `settings: ${v}`);
   expect((await page.textContent('#criteriaPreview')).includes('visible passes'), 'criteria preview rendered');
-  expect((await page.textContent('#notifyWindowOut')) === '06:00 – 22:00', 'time window shown');
+  expect((await page.textContent('#notifyWindowOut')) === '06:00 – 24:00', 'time window shown');
 });
 
-await step('time window: knobs move, may cross, and the setting is saved', async () => {
+await step('time window: knobs move, crossed they span midnight, and the setting is saved', async () => {
   const out = () => page.textContent('#notifyWindowOut');
   await page.focus('#notifyFrom');
   await page.keyboard.press('ArrowRight'); // +30 min
   await page.keyboard.press('ArrowRight');
-  expect((await out()) === '07:00 – 22:00', `earliest moved: ${await out()}`);
+  expect((await out()) === '07:00 – 24:00', `start moved: ${await out()}`);
   await page.focus('#notifyTo');
-  for (let i = 0; i < 32; i++) await page.keyboard.press('ArrowLeft'); // 22:00 → 06:00, past the other knob
-  expect((await out()) === '06:00 – 07:00', `knobs crossed: ${await out()}`);
+  for (let i = 0; i < 44; i++) await page.keyboard.press('ArrowLeft'); // 24:00 → 02:00, past the other knob
+  expect((await out()) === '07:00 – 02:00 (overnight)', `knobs crossed: ${await out()}`);
+  expect(await page.evaluate(() => document.getElementById('notifyWindow').classList.contains('overnight')), 'track filled outside the knobs');
   const saved = await page.evaluate(async () => { const s = await (await import('/js/core/store.js')).getSettings(); return [s.notifyFrom, s.notifyTo]; });
-  expect(saved[0] === 360 && saved[1] === 420, `saved: ${saved}`);
+  expect(saved[0] === 420 && saved[1] === 120, `saved: ${saved}`);
   // back to the defaults for the following steps
-  await page.evaluate(async () => (await import('/js/core/store.js')).saveSettings({ notifyFrom: 360, notifyTo: 1320 }));
+  await page.evaluate(async () => (await import('/js/core/store.js')).saveSettings({ notifyFrom: 360, notifyTo: 1440 }));
 });
 
 await step('about page shows the version', async () => {

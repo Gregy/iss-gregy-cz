@@ -105,6 +105,7 @@ path.observer { stroke: #fff; stroke-width: 2; fill: #f472b6; fill-opacity: 1; }
 .look { display: flex; align-items: center; gap: 12px; }
 .look .big { font-size: 1.05rem; font-weight: 650; }
 .look .sub { color: var(--muted); font-size: .86rem; }
+.look.warn { border-color: #e5484d; }
 .look.up { border-color: var(--accent); background: linear-gradient(135deg, rgba(255, 209, 102, .12), transparent 60%); }
 .compass { width: 54px; height: 54px; flex: 0 0 54px; }
 .compass circle { fill: var(--surface-2); stroke: var(--line); }
@@ -208,22 +209,24 @@ path.observer { stroke: #fff; stroke-width: 2; fill: #f472b6; fill-opacity: 1; }
 .field label { display: flex; justify-content: space-between; font-size: .86rem; margin-bottom: .3rem; }
 .field output { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
 /* Sliders: grey track, yellow fill between --a and --b (fractions 0-1), yellow knobs.
-   The fill stops are offset by half a knob, matching where the browser draws the knob. */
+   The fill stops are offset by half a knob, matching where the browser draws the knob.
+   --in / --out: the colours between and outside the two stops. */
 input[type=range] {
   --a: -1; --b: 0; --knob: 18px; /* --a below 0: single sliders fill from the very start of the track */
+  --in: var(--accent); --out: var(--line);
   -webkit-appearance: none; appearance: none; width: 100%; height: 24px; margin: 0; background: transparent; cursor: pointer;
 }
 input[type=range]::-webkit-slider-runnable-track {
   height: 4px; border-radius: 2px;
   background: linear-gradient(to right,
-    var(--line) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--a)), var(--accent) 0,
-    var(--accent) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--b)), var(--line) 0);
+    var(--out) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--a)), var(--in) 0,
+    var(--in) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--b)), var(--out) 0);
 }
 input[type=range]::-moz-range-track {
   height: 4px; border-radius: 2px;
   background: linear-gradient(to right,
-    var(--line) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--a)), var(--accent) 0,
-    var(--accent) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--b)), var(--line) 0);
+    var(--out) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--a)), var(--in) 0,
+    var(--in) calc(var(--knob) / 2 + (100% - var(--knob)) * var(--b)), var(--out) 0);
 }
 input[type=range]::-webkit-slider-thumb {
   -webkit-appearance: none; width: var(--knob); height: var(--knob); margin-top: calc(2px - var(--knob) / 2);
@@ -238,8 +241,9 @@ input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px va
 input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--accent-2); }
 
 /* two knobs on one track: only the knobs take the pointer; the second track is see-through */
-.dual { position: relative; height: 24px; }
-.dual input { position: absolute; inset: 0; pointer-events: none; --a: inherit; --b: inherit; }
+.dual { position: relative; height: 24px; --in: var(--accent); --out: var(--line); }
+.dual.overnight { --in: var(--line); --out: var(--accent); } /* a window across midnight: filled outside the knobs */
+.dual input { position: absolute; inset: 0; pointer-events: none; --a: inherit; --b: inherit; --in: inherit; --out: inherit; }
 .dual input::-webkit-slider-thumb { pointer-events: auto; }
 .dual input::-moz-range-thumb { pointer-events: auto; }
 .dual input + input::-webkit-slider-runnable-track { background: none; }
