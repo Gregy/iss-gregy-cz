@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
 
@@ -49,5 +49,17 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: .
+      # deploy-pages looks the artifact up once, right after the upload, and
+      # intermittently finds nothing ("No artifacts named github-pages") because
+      # the artifacts API hasn't registered it yet (actions/deploy-pages#451).
+      # Give it a moment and try once more; it fails before creating a
+      # deployment, so a second attempt is safe.
       - id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      - name: Wait for the artifact to register
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
